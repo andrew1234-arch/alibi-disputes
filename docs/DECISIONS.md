@@ -21,8 +21,9 @@ If the variable is unset, submissions are disabled. Only the literal `false` ena
 ## ADR-006 — require-evidence in the probe is opt-in (2026-10-06)
 Even sandbox state changes need an explicit `--require-evidence` flag. The default probe run is read-only.
 
-## Hooks proof
-(see below, appended when verified)
+## Hooks proof (2026-10-06)
+- **pre-commit** (`pnpm typecheck`): staged `packages/core/src/zz-broken.ts` with `export const broken: number = "nope";` → commit refused, exit 1, `error TS2322: Type 'string' is not assignable to type 'number'`. File removed; nothing was committed.
+- **pre-push** (`pnpm build:all`): on a throwaway branch, added `import "./missing.css";` to `apps/web/app/page.tsx` (passes `tsc`, fails `next build`) and pushed to a scratch bare remote → push refused, exit 1, `Module not found: Can't resolve './missing.css'`. The remote received 0 refs. Branch and remote deleted.
 
 ## Later
 - Ideas that are out of scope go here.
