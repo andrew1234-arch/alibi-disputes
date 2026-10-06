@@ -1,0 +1,16 @@
+{
+  "name": "@alibi/agent",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit"
+  },
+  "dependencies": { "@alibi/core": "workspace:*", "@alibi/casefile": "workspace:*", "@alibi/merchant": "workspace:*", "@alibi/paypal": "workspace:*" },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "~5.9.3"
+  }
+}

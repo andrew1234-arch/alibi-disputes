@@ -1,0 +1,32 @@
+{
+  "name": "alibi-disputes",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "prepare": "husky",
+    "typecheck": "pnpm -r --if-present typecheck && tsc --noEmit -p scripts",
+    "build:all": "pnpm -r build",
+    "test": "pnpm -r --if-present test",
+    "probe:sandbox": "tsx --env-file-if-exists=.env scripts/probe-sandbox.ts",
+    "web:dev": "pnpm --filter @alibi/web dev"
+  },
+  "devDependencies": {
+    "@alibi/core": "workspace:*",
+    "@alibi/paypal": "workspace:*",
+    "@types/node": "^22.20.5",
+    "husky": "^9.1.7",
+    "tsx": "^4.23.15",
+    "typescript": "~5.9.3"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "sharp",
+      "unrs-resolver"
+    ]
+  }
+}
