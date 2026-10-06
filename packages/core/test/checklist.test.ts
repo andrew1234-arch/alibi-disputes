@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { baselineStance, buildChecklist, isDeliveredEvent } from "../src/checklist.js";
+import { makeEvidenceRecord } from "../src/evidence.js";
 import { evidenceRule } from "../src/reason-map.js";
 import { delivered, inTransit, order, refund, shipment, tx } from "./fixtures.js";
 
@@ -19,7 +20,13 @@ describe("reason map", () => {
 describe("buildChecklist (SPEC §5.3 worked example)", () => {
   it("delivered → satisfied, no gap, stance fight", () => {
     const list = buildChecklist(INR, [fromSeller("PROOF_OF_FULFILLMENT")], [tx, order, shipment, inTransit, delivered]);
-    expect(list).toEqual([{ evidenceType: "PROOF_OF_FULFILLMENT", satisfiedBy: [shipment.id, inTransit.id, delivered.id] }]);
+    expect(list).toEqual([
+      {
+        evidenceType: "PROOF_OF_FULFILLMENT",
+        satisfiedBy: [shipment.id, inTransit.id, delivered.id],
+        routes: ["tracking_info", "notes_or_documents"],
+      },
+    ]);
     expect(baselineStance(list)).toBe("fight");
   });
 
@@ -41,6 +48,7 @@ describe("buildChecklist (SPEC §5.3 worked example)", () => {
       evidenceType: "PROOF_OF_FULFILLMENT",
       satisfiedBy: [],
       gap: "No tracking number or shipment record on file.",
+      routes: ["tracking_info", "notes_or_documents"],
     });
     expect(baselineStance(list)).toBe("consider_conceding");
   });
@@ -51,13 +59,30 @@ describe("buildChecklist (SPEC §5.3 worked example)", () => {
       [fromSeller("PROOF_OF_REFUND"), fromSeller("PROOF_OF_REFUND"), { evidenceType: "OTHER", source: "REQUESTED_FROM_BUYER" }],
       [refund],
     );
-    expect(list).toEqual([{ evidenceType: "PROOF_OF_REFUND", satisfiedBy: [refund.id] }]);
+    expect(list).toEqual([{ evidenceType: "PROOF_OF_REFUND", satisfiedBy: [refund.id], routes: ["refund_ids"] }]);
   });
 
   it("PayPal's request wins: unmapped types become a manual-review gap, never dropped", () => {
     const list = buildChecklist(INR, [fromSeller("PROOF_OF_DELIVERY_SIGNATURE")], [delivered]);
     expect(list[0]?.satisfiedBy).toEqual([]);
     expect(list[0]?.gap).toMatch(/no mapping for PROOF_OF_DELIVERY_SIGNATURE/);
+    expect(list[0]?.routes).toBeUndefined();
+  });
+
+  it("judges delivery by the latest event: delivered then returned is a gap", () => {
+    const returned = makeEvidenceRecord({
+      ...delivered,
+      value: "Returned to sender",
+      occurredAt: "2026-10-09T10:00:00Z",
+    });
+    const list = buildChecklist(INR, [fromSeller("PROOF_OF_FULFILLMENT")], [shipment, inTransit, delivered, returned]);
+    expect(list[0]?.gap).toBe('Tracking showed "Delivered, front door", but the latest event is "Returned to sender".');
+    expect(baselineStance(list)).toBe("fight_with_gaps");
+  });
+
+  it("a delivered scan after earlier events is clean regardless of input order", () => {
+    const list = buildChecklist(INR, [fromSeller("PROOF_OF_FULFILLMENT")], [delivered, shipment, inTransit]);
+    expect(list[0]?.gap).toBeUndefined();
   });
 
   it("nothing requested → consider_conceding (nothing to fight with)", () => {

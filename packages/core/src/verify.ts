@@ -1,8 +1,8 @@
-import { buildRecordFacts, type RecordFacts } from "./record-facts.js";
+import { buildRecordFacts, isValidTimeZone, type RecordFacts } from "./record-facts.js";
 import { carrierCode, currenciesCompatible, extractFacts, normaliseIdentifier, normaliseQuote, type ExtractedFact } from "./extract.js";
 import { canonicalJson, sha256Hex } from "./hash.js";
 import { PROVIDE_EVIDENCE_NOTES_MAX } from "./paypal-enums.js";
-import type { CaseFile, ChecklistItem, DraftClaim, EvidenceRecord } from "./types.js";
+import type { CaseFile, ChecklistItem, DraftClaim, EvidenceRecord, SubmissionRoute, TrackingInfo } from "./types.js";
 
 // Draft verifier (SPEC §5.5, CLAUDE §1.2). Pure and deterministic.
 //
@@ -10,7 +10,8 @@ import type { CaseFile, ChecklistItem, DraftClaim, EvidenceRecord } from "./type
 //   2. Every amount, date, identifier, carrier, number and quote in a claim
 //      matches a value in that claim's *own* cited records. One miss drops the
 //      whole claim: unsupported claims are removed, not softened.
-//   3. Every requested evidence type is either addressed or listed as a gap.
+//   3. Every requested evidence type is either addressed — through a route
+//      PayPal accepts for it under this reason — or listed as a gap.
 //   4. Notes = surviving claims joined, within PayPal's notes limit. When over,
 //      the lowest-priority claims (last in the list) are dropped whole.
 //   6. The draft hash binds a merchant approval to this exact content.
@@ -25,11 +26,6 @@ import type { CaseFile, ChecklistItem, DraftClaim, EvidenceRecord } from "./type
 //   claim C: "The buyer paid $48.00."                            cites [ev_tx]   → dropped:
 //            Amount "$48.00" does not match the cited evidence
 
-export interface TrackingInfo {
-  carrier: string;
-  number: string;
-}
-
 export interface DraftInput {
   claims: DraftClaim[]; // priority order: first = most important
   evidenceInfo?: { trackingInfo?: TrackingInfo[]; refundIds?: string[] };
@@ -38,7 +34,11 @@ export interface DraftInput {
 
 export interface VerifyOptions {
   notesMax?: number;
-  /** Merchant's IANA time zone; a record's occurredAt also matches its local calendar date. */
+  /**
+   * Merchant's IANA time zone: a record's occurredAt also matches its local
+   * date and time. Without it, claimed times must match UTC. An invalid zone is
+   * ignored with a warning, never thrown.
+   */
   timeZone?: string;
 }
 
@@ -53,6 +53,8 @@ export interface VerifiedDraft {
   documents: string[];
   removed: { text: string; reason: string }[];
   coverage: Coverage[];
+  /** Problems with the verification itself (e.g. bad config), shown to the merchant. */
+  warnings: string[];
   draftHash: string;
 }
 
@@ -66,10 +68,15 @@ export function verifyDraft(
 ): VerifiedDraft {
   const notesMax = opts.notesMax ?? PROVIDE_EVIDENCE_NOTES_MAX;
   const removed: { text: string; reason: string }[] = [];
+  const warnings: string[] = [];
+  const timeZone = opts.timeZone && isValidTimeZone(opts.timeZone) ? opts.timeZone : undefined;
+  if (opts.timeZone && !timeZone) {
+    warnings.push(`Unknown time zone "${opts.timeZone}"; dates and times were checked in UTC only.`);
+  }
   const factsCache = new Map<string, RecordFacts>();
   const factsOf = (r: EvidenceRecord) => {
     let f = factsCache.get(r.id);
-    if (!f) factsCache.set(r.id, (f = buildRecordFacts(r, opts.timeZone)));
+    if (!f) factsCache.set(r.id, (f = buildRecordFacts(r, timeZone)));
     return f;
   };
 
@@ -107,7 +114,7 @@ export function verifyDraft(
   const coverage = checklist.map((item) => coverageFor(item, claims, evidenceInfo, documents, evidence));
 
   const verified = { claims, notes, ...(evidenceInfo ? { evidenceInfo } : {}), documents };
-  return { ...verified, removed, coverage, draftHash: draftHash(verified) };
+  return { ...verified, removed, coverage, warnings, draftHash: draftHash(verified) };
 }
 
 function joinNotes(claims: readonly DraftClaim[]): string {
@@ -147,11 +154,22 @@ function supported(f: ExtractedFact, cited: readonly RecordFacts[]): boolean {
       );
     case "ambiguous_date":
       return false;
+    case "time":
+      return cited.some((c) =>
+        c.times.some(
+          (t) =>
+            (t.hour === f.hour || (f.anyMeridiem === true && t.hour === f.hour + 12)) &&
+            (f.minute === undefined || t.minute === f.minute),
+        ),
+      );
     case "amount":
+      // A claim that names a currency needs a record that names a compatible
+      // one: "€84" is not supported by a bare 84. A currency-less claim
+      // ("84.00") may match a bare number.
       return cited.some(
         (c) =>
           c.amounts.some((a) => a.value === f.value && currenciesCompatible(f.currency, a.currency)) ||
-          (f.currency === undefined || !c.amounts.length ? c.numbers.has(f.value) : false),
+          (f.currency === undefined && c.numbers.has(f.value)),
       );
     case "identifier":
       return cited.some((c) => c.identifiers.has(f.id));
@@ -174,6 +192,8 @@ function failureMessage(f: ExtractedFact): string {
       return `Quote "${f.text}" does not appear in the cited evidence`;
     case "date":
       return `Date "${f.raw}" does not match any date in the cited evidence`;
+    case "time":
+      return `Time "${f.raw}" does not match the cited evidence`;
     case "ambiguous_date":
       return `Date "${f.raw}" is ambiguous (day/month order); write it as e.g. "Oct 2, 2026"`;
     case "amount":
@@ -209,15 +229,19 @@ function verifyEvidenceInfo(
         removed.push({ text: label, reason: `Tracking number "${t.number}" not found in any shipment record` });
         continue;
       }
-      const code = carrierCode(t.carrier);
-      const carrierOk = shipments.some((r) =>
-        code ? factsOf(r).carriers.has(code) : factsOf(r).texts.some((x) => x.includes(normaliseQuote(t.carrier))),
-      );
+      // The drafter may send a PayPal enum ("UPS"), a name ("FedEx"), or
+      // OTHER + carrierOther ("Evri"). Carriers PayPal doesn't list go out as
+      // OTHER + carrier_name_other, never as a free-text carrier_name.
+      const name = t.carrier.toUpperCase() === "OTHER" ? (t.carrierOther ?? "") : t.carrier;
+      const code = carrierCode(name);
+      const carrierOk =
+        name.trim() !== "" &&
+        shipments.some((r) => (code ? factsOf(r).carriers.has(code) : factsOf(r).texts.some((x) => x.includes(normaliseQuote(name)))));
       if (!carrierOk) {
-        removed.push({ text: label, reason: `Carrier "${t.carrier}" not named in the shipment record for ${t.number}` });
+        removed.push({ text: label, reason: `Carrier "${name || t.carrier}" not named in the shipment record for ${t.number}` });
         continue;
       }
-      kept.push({ carrier: code ?? t.carrier, number: t.number });
+      kept.push(code ? { carrier: code, number: t.number } : { carrier: "OTHER", carrierOther: name.trim(), number: t.number });
     }
     if (kept.length) out.trackingInfo = kept;
   }
@@ -242,24 +266,29 @@ function coverageFor(
   documents: readonly string[],
   evidence: Readonly<Record<string, EvidenceRecord>>,
 ): Coverage {
+  // Unmapped types have no routes: anything that uses their records counts.
+  const routes: readonly SubmissionRoute[] = item.routes ?? ["tracking_info", "refund_ids", "notes_or_documents"];
   const satisfying = new Set(item.satisfiedBy);
+  const refOf = (id: string) => normaliseIdentifier(evidence[id]?.ref ?? "");
   const citedBy = claims.flatMap((c, i) => (c.evidenceIds.some((id) => satisfying.has(id)) ? [i] : []));
-  const viaDocument = documents.some((id) => satisfying.has(id));
-  const viaTracking =
-    item.evidenceType === "PROOF_OF_FULFILLMENT" &&
-    (info?.trackingInfo ?? []).some((t) =>
-      item.satisfiedBy.some((id) => normaliseIdentifier(evidence[id]?.ref ?? "") === normaliseIdentifier(t.number)),
-    );
-  const viaRefund =
-    item.evidenceType === "PROOF_OF_REFUND" &&
-    (info?.refundIds ?? []).some((rid) =>
-      item.satisfiedBy.some((id) => normaliseIdentifier(evidence[id]?.ref ?? "") === normaliseIdentifier(rid)),
-    );
 
-  if (citedBy.length || viaDocument || viaTracking || viaRefund) {
+  const viaNotes = routes.includes("notes_or_documents") && (citedBy.length > 0 || documents.some((id) => satisfying.has(id)));
+  const viaTracking =
+    routes.includes("tracking_info") &&
+    (info?.trackingInfo ?? []).some((t) => item.satisfiedBy.some((id) => refOf(id) === normaliseIdentifier(t.number)));
+  const viaRefund =
+    routes.includes("refund_ids") &&
+    (info?.refundIds ?? []).some((rid) => item.satisfiedBy.some((id) => refOf(id) === normaliseIdentifier(rid)));
+
+  if (viaNotes || viaTracking || viaRefund) {
     return item.gap
       ? { evidenceType: item.evidenceType, status: "addressed", citedBy, gap: item.gap }
       : { evidenceType: item.evidenceType, status: "addressed", citedBy };
+  }
+
+  // Records are used, but not in a form PayPal accepts for this type.
+  if (citedBy.length || documents.some((id) => satisfying.has(id))) {
+    return { evidenceType: item.evidenceType, status: "gap", gap: wrongRouteGap(item.evidenceType, routes) };
   }
   return {
     evidenceType: item.evidenceType,
@@ -270,6 +299,16 @@ function coverageFor(
         ? `Records on file support ${item.evidenceType}, but no verified claim or attachment uses them.`
         : `No records on file that support ${item.evidenceType}.`),
   };
+}
+
+const ROUTE_LABEL: Record<SubmissionRoute, string> = {
+  tracking_info: "carrier and tracking number (tracking info)",
+  refund_ids: "refund ID",
+  notes_or_documents: "notes or documents",
+};
+
+function wrongRouteGap(evidenceType: string, routes: readonly SubmissionRoute[]): string {
+  return `PayPal accepts ${evidenceType} for this dispute reason only as ${routes.map((r) => ROUTE_LABEL[r]).join(" or ")}; mentioning it in the notes doesn't count.`;
 }
 
 // ---------- approval binding (step 6) ----------

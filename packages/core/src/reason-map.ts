@@ -1,4 +1,4 @@
-import type { EvidenceKind } from "./types.js";
+import type { EvidenceKind, SubmissionRoute } from "./types.js";
 
 // Reason → evidence map (SPEC §5.2).
 //
@@ -10,9 +10,6 @@ import type { EvidenceKind } from "./types.js";
 //
 // PayPal's actual REQUESTED_FROM_SELLER list on the dispute always wins: this
 // table is only for ranking and gap detection, never for overriding PayPal.
-
-/** How PayPal accepts the evidence in provide-evidence. */
-export type SubmissionRoute = "tracking_info" | "refund_ids" | "notes_or_documents";
 
 export interface EvidenceRule {
   routes: SubmissionRoute[];

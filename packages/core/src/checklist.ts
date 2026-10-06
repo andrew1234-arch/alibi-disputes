@@ -43,8 +43,9 @@ export function buildChecklist(
     }
     const matching = records.filter((r) => rule.kinds.includes(r.kind));
     const satisfiedBy = matching.map((r) => r.id);
+    const routes = [...rule.routes];
     const gap = gapFor(evidenceType, matching);
-    return gap ? { evidenceType, satisfiedBy, gap } : { evidenceType, satisfiedBy };
+    return gap ? { evidenceType, satisfiedBy, gap, routes } : { evidenceType, satisfiedBy, routes };
   });
 }
 
@@ -52,21 +53,36 @@ function gapFor(evidenceType: string, matching: readonly EvidenceRecord[]): stri
   if (evidenceType === "PROOF_OF_FULFILLMENT") {
     const shipped = matching.some((r) => r.kind === "fulfilment" || r.kind === "carrier_event");
     if (!shipped) return "No tracking number or shipment record on file.";
-    if (!matching.some(isDeliveredEvent)) {
-      const last = [...matching]
-        .filter((r) => r.kind === "carrier_event" && r.occurredAt)
-        .sort((a, b) => Date.parse(a.occurredAt!) - Date.parse(b.occurredAt!))
-        .at(-1);
-      return last
-        ? `Tracking shows "${String(last.value)}"; no delivery confirmation.`
-        : "Tracking shows in transit; no delivery confirmation.";
-    }
-    return undefined;
+    return deliveryGap(matching.filter((r) => r.kind === "carrier_event"));
   }
   if (evidenceType === "PROOF_OF_REFUND") {
     return matching.length ? undefined : "No refund on record for this transaction.";
   }
   return matching.length ? undefined : `No records on file that support ${evidenceType}.`;
+}
+
+/**
+ * The parcel's *latest* status decides. A "Delivered" scan followed by
+ * "Returned to sender" is not proof of delivery.
+ *   [Delivered Oct 6]                         → no gap
+ *   [Delivered Oct 6, Returned to sender Oct 9] → gap: showed delivered, latest says returned
+ *   [In transit Oct 4]                        → gap: tracking shows "In transit"
+ * Undated events can't be ordered: they only count when no event is dated.
+ */
+function deliveryGap(events: readonly EvidenceRecord[]): string | undefined {
+  const dated = events
+    .filter((r) => r.occurredAt && !Number.isNaN(Date.parse(r.occurredAt)))
+    .sort((a, b) => Date.parse(a.occurredAt!) - Date.parse(b.occurredAt!));
+  if (dated.length === 0) {
+    return events.some(isDeliveredEvent) ? undefined : "Tracking shows in transit; no delivery confirmation.";
+  }
+  const latest = dated.at(-1)!;
+  if (isDeliveredEvent(latest)) return undefined;
+  const earlierDelivery = dated.find(isDeliveredEvent);
+  if (earlierDelivery) {
+    return `Tracking showed "${String(earlierDelivery.value)}", but the latest event is "${String(latest.value)}".`;
+  }
+  return `Tracking shows "${String(latest.value)}"; no delivery confirmation.`;
 }
 
 function dedupeTypes(requested: readonly RequestedEvidence[]): string[] {

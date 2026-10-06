@@ -65,8 +65,35 @@ describe("dates", () => {
     expect(one("on 02/10/2026").type).toBe("ambiguous_date");
   });
 
+  it("does not read words that start with a month name as dates", () => {
+    expect(types("Shipped to 3 Market Street with 2 Decorative pillows")).toEqual(["number", "number"]);
+    expect(types("Mayfield 12, Junction 4, Octagon 7, Augusta 9")).toEqual(["number", "number", "number", "number"]);
+    expect(types("Sold 2 Marches")).toEqual(["number"]);
+  });
+
   it("does not read lower-case 'may' as a month", () => {
     expect(types("the buyer may 2 times have asked")).toEqual(["number"]);
+  });
+});
+
+describe("times", () => {
+  it.each([
+    ["2:15pm", { hour: 14, minute: 15 }],
+    ["2:15 p.m.", { hour: 14, minute: 15 }],
+    ["12:05am", { hour: 0, minute: 5 }],
+    ["12pm", { hour: 12 }],
+    ["9 a.m.", { hour: 9 }],
+    ["14:15", { hour: 14, minute: 15 }],
+    ["2:15", { hour: 2, minute: 15, anyMeridiem: true }],
+  ])("%s", (text, expected) => {
+    const f = one(`delivered at ${text} that day`);
+    expect(f.type).toBe("time");
+    expect(f).toEqual(expect.objectContaining(expected));
+    if (!("anyMeridiem" in expected)) expect(f).not.toHaveProperty("anyMeridiem");
+  });
+
+  it("is not fooled by amounts or words", () => {
+    expect(types("2 amounts and 3 pmts")).toEqual(["number", "number"]);
   });
 });
 

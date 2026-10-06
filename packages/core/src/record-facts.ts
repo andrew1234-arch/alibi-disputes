@@ -6,22 +6,41 @@ import type { EvidenceRecord } from "./types.js";
 //
 // Example: { kind: "transaction", ref: "8XY12345AB678901C", label: "PayPal capture",
 //            value: "84.00 USD", occurredAt: "2026-10-02T14:03:00Z" }
-//   → amounts {84 USD}, identifiers {8XY12345AB678901C}, dates {2026-10-02}
+//   → amounts {84 USD}, identifiers {8XY12345AB678901C}, dates {2026-10-02}, times {14:03}
+// occurredAt contributes its UTC date and time, plus the merchant-local ones
+// when a time zone is given.
 
 export interface RecordFacts {
   texts: string[]; // normalised label and value, for quote matching
   dates: { year?: number; month: number; day?: number }[];
+  times: { hour: number; minute?: number }[];
   amounts: { value: string; currency: string | undefined }[];
   identifiers: Set<string>;
   numbers: Set<string>;
   carriers: Set<string>;
 }
 
+/**
+ * True if `tz` is an IANA zone this runtime knows. Callers validate merchant
+ * config with this; buildRecordFacts also guards itself so a typo can never
+ * crash verification.
+ */
+export function isValidTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** `timeZone` must be valid (see isValidTimeZone); an invalid one is ignored, never thrown. */
 export function buildRecordFacts(r: EvidenceRecord, timeZone?: string): RecordFacts {
   const value = String(r.value);
   const out: RecordFacts = {
     texts: [normaliseQuote(r.label), normaliseQuote(value)],
     dates: [],
+    times: [],
     amounts: [],
     identifiers: new Set(),
     numbers: new Set(),
@@ -54,6 +73,10 @@ export function buildRecordFacts(r: EvidenceRecord, timeZone?: string): RecordFa
         case "carrier":
           out.carriers.add(f.carrier);
           break;
+        case "time":
+          out.times.push({ hour: f.hour, ...(f.minute !== undefined ? { minute: f.minute } : {}) });
+          if (f.anyMeridiem) out.times.push({ hour: f.hour + 12, ...(f.minute !== undefined ? { minute: f.minute } : {}) });
+          break;
         case "quote":
         case "ambiguous_date":
           break;
@@ -66,15 +89,26 @@ export function buildRecordFacts(r: EvidenceRecord, timeZone?: string): RecordFa
   if (r.occurredAt) {
     const t = Date.parse(r.occurredAt);
     if (!Number.isNaN(t)) {
-      out.dates.push(calendarDate(t, "UTC"));
-      if (timeZone) out.dates.push(calendarDate(t, timeZone));
+      for (const zone of timeZone && timeZone !== "UTC" && isValidTimeZone(timeZone) ? ["UTC", timeZone] : ["UTC"]) {
+        const local = localParts(t, zone);
+        out.dates.push({ year: local.year, month: local.month, day: local.day });
+        out.times.push({ hour: local.hour, minute: local.minute });
+      }
     }
   }
   return out;
 }
 
-function calendarDate(t: number, timeZone: string): { year: number; month: number; day: number } {
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone, year: "numeric", month: "numeric", day: "numeric" }).formatToParts(t);
+function localParts(t: number, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    hourCycle: "h23",
+  }).formatToParts(t);
   const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
-  return { year: get("year"), month: get("month"), day: get("day") };
+  return { year: get("year"), month: get("month"), day: get("day"), hour: get("hour"), minute: get("minute") };
 }

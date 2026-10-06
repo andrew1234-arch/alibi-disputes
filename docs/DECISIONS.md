@@ -27,7 +27,8 @@ Consequences, all deliberate:
 - Derived numbers ("arrived 3 days later") are dropped. The drafter must state facts, not arithmetic.
 - Day/month-ambiguous numeric dates (02/10/2026) are dropped. The drafter writes "Oct 2, 2026".
 - A date also matches the record's calendar date in the merchant's time zone when one is given, because a 01:15 UTC event is still "yesterday" in Chicago.
-- `$` is compatible with any dollar currency. An explicit mismatch (€ vs USD) drops the claim.
+- Clock times ("2:42pm", "14:15", "9 a.m.") are their own fact type. They match a record's `occurredAt` in UTC, or in the merchant's time zone when one is given, or a time written in the record. "2pm" matches the hour only. Without a time zone, a local time is dropped, so configure the zone. An invalid zone produces a warning, not a crash.
+- `$` is compatible with any dollar currency. A claim that names a currency needs a cited record that names a compatible one: "€84" against a bare `84` is dropped. Adapters must store money as text with its currency ("84.00 USD").
 - Not covered deterministically: numbers written as words, item names, tracking numbers with internal spaces. The optional LLM check (SPEC §5.5 step 5) is the backstop.
 
 ## ADR-008 — Claim order is priority (2026-10-06)
@@ -38,6 +39,18 @@ Evidence ids (`ev_` + 16 hex chars of SHA-256 over source/kind/ref/value) and dr
 
 ## ADR-010 — Unmapped requested evidence types become manual-review gaps (2026-10-06)
 If PayPal requests a type the reason map doesn't list for that reason, the checklist shows a gap telling the merchant to review it manually. It is never dropped and never forced into a type we know.
+
+## ADR-011 — Coverage respects PayPal's submission routes (2026-10-06, review fix)
+Each checklist item carries the routes PayPal accepts for that type under the dispute's reason (`tracking_info`, `refund_ids`, `notes_or_documents`). A type counts as addressed only through one of those routes. Example: for UNAUTHORISED, proof of fulfilment mentioned only in the notes is a gap that says tracking info is required.
+
+## ADR-012 — Evidence identity includes occurredAt (2026-10-06, review fix)
+Two "In transit" scans of the same parcel on different days are two facts. Before this change they hashed to the same id and case assembly threw.
+
+## ADR-013 — `@alibi/core` vs `@alibi/core/server` (2026-10-06, review fix)
+The root entry is browser-safe: types, enums, env, reason map, checklist, deadlines and extractors. Hashing, evidence ids and the verifier use `node:crypto` and live in `@alibi/core/server`. `test/entrypoints.test.ts` fails if a Node built-in ever enters the root entry's import graph.
+
+## ADR-014 — Unlisted carriers go out as OTHER (2026-10-06, review fix)
+Verified tracking info always uses a PayPal `carrier_name` enum value. A carrier Alibi can't map ("Evri") is sent as `carrier_name: OTHER` with `carrier_name_other`, which PayPal's spec makes mandatory for OTHER. It is never sent as free text.
 
 ## Hooks proof (2026-10-06)
 - **pre-commit** (`pnpm typecheck`): staged `packages/core/src/zz-broken.ts` with `export const broken: number = "nope";` → commit refused, exit 1, `error TS2322: Type 'string' is not assignable to type 'number'`. File removed; nothing was committed.

@@ -33,10 +33,26 @@ export interface RequestedEvidence {
   dueAt?: string;
 }
 
+/** How PayPal accepts an evidence type in provide-evidence (see reason-map.ts). */
+export type SubmissionRoute = "tracking_info" | "refund_ids" | "notes_or_documents";
+
 export interface ChecklistItem {
   evidenceType: string;
   satisfiedBy: string[]; // EvidenceRecord ids
   gap?: string; // plain-language description if unsatisfied
+  /** Routes PayPal accepts for this type under the dispute's reason. Absent = unmapped type. */
+  routes?: SubmissionRoute[];
+}
+
+/**
+ * PayPal tracking_info. `carrier` is a PayPal carrier_name enum value; for a
+ * carrier PayPal doesn't list, carrier = "OTHER" and carrierOther holds the
+ * name (spec: carrier_name_other is mandatory when carrier_name is OTHER).
+ */
+export interface TrackingInfo {
+  carrier: string;
+  number: string;
+  carrierOther?: string;
 }
 
 export interface DraftClaim {
@@ -60,7 +76,7 @@ export interface CaseFile {
   draft: {
     claims: DraftClaim[];
     notes: string; // assembled from verified claims; max PROVIDE_EVIDENCE_NOTES_MAX
-    evidenceInfo?: { trackingInfo?: { carrier: string; number: string }[]; refundIds?: string[] };
+    evidenceInfo?: { trackingInfo?: TrackingInfo[]; refundIds?: string[] };
     documents: string[]; // EvidenceRecord ids with documentUrl
   };
   evidence: Record<string, EvidenceRecord>;

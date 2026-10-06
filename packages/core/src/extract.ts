@@ -9,7 +9,7 @@
 // Worked example:
 //   'Order #1042 for $84.00 shipped via UPS (1Z999AA10123456784) on Oct 2, 2026; buyer wrote "thanks, got it".'
 //   → quote     "thanks, got it"
-//     date      2026-10-02
+//     date      2026-10-02  (clock times like "2:15pm" are their own fact type)
 //     amount    84 ($)
 //     identifier 1042, 1Z999AA10123456784
 //     carrier   UPS
@@ -24,6 +24,8 @@ export type ExtractedFact = { raw: string; start: number; end: number } & (
   | { type: "date"; year?: number; month: number; day?: number }
   /** e.g. 02/10/2026: could be Feb 10 or Oct 2. Never verifiable → claim dropped. */
   | { type: "ambiguous_date" }
+  /** Clock time. minute undefined for "2pm"; anyMeridiem for "2:15" with no am/pm (02:15 or 14:15). */
+  | { type: "time"; hour: number; minute?: number; anyMeridiem?: boolean }
   /** value is canonical decimal ("84", "1234.5"); currency is ISO code, "$" (any dollar), or undefined. */
   | { type: "amount"; value: string; currency: string | undefined }
   /** id is normalised: uppercase, no "#" or "-". */
@@ -46,7 +48,8 @@ const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December",
   "Jan", "Feb", "Mar", "Apr", "Jun", "Jul", "Aug", "Sept", "Sep", "Oct", "Nov", "Dec",
 ];
-const MONTH_RE = `(${[...MONTH_NAMES, ...MONTH_NAMES.map((m) => m.toUpperCase())].join("|")})\\.?`;
+// The lookahead stops "Market", "Decorative", "Mayfield", "Junction" reading as months.
+const MONTH_RE = `(${[...MONTH_NAMES, ...MONTH_NAMES.map((m) => m.toUpperCase())].join("|")})(?![A-Za-z])\\.?`;
 
 // ---------- currencies ----------
 
@@ -73,6 +76,10 @@ export function currenciesCompatible(a: string | undefined, b: string | undefine
 
 // ---------- carriers (names → PayPal tracking_info.carrier_name enum) ----------
 
+// Every value below is in tracking_info.carrier_name's enum in PayPal's OpenAPI
+// spec (customer_disputes_v1.json @ a54ed770, checked 2026-10-06; see
+// docs/OPEN_QUESTIONS.md). Carriers not listed here go out as OTHER +
+// carrier_name_other.
 export const CARRIERS: readonly { carrier: string; re: RegExp }[] = [
   { carrier: "USPS", re: /\bUSPS\b/g },
   { carrier: "UPS", re: /\bUPS\b/g }, // case-sensitive: "ups" in prose is not a carrier
@@ -229,7 +236,23 @@ export function extractFacts(input: string): ExtractedFact[] {
     return null;
   });
 
-  // 3. Amounts: symbol prefix, code prefix, code/symbol suffix.
+  // 3. Clock times: "2:15pm", "14:15", "9 a.m.", "2:15".
+  const time = (m: RegExpExecArray, h: number, min: number | undefined, meridiem: string | undefined): ExtractedFact | null => {
+    if (min !== undefined && min > 59) return null;
+    if (meridiem) {
+      if (h < 1 || h > 12) return null;
+      const pm = meridiem.toLowerCase().startsWith("p");
+      return { type: "time", hour: (h % 12) + (pm ? 12 : 0), ...(min !== undefined ? { minute: min } : {}), ...raw(m) };
+    }
+    if (h > 23) return null;
+    return { type: "time", hour: h, ...(min !== undefined ? { minute: min } : {}), ...(h >= 1 && h <= 12 ? { anyMeridiem: true } : {}), ...raw(m) };
+  };
+  pass(w, "\\b(\\d{1,2}):(\\d{2})(?::\\d{2})?(?:\\s?([ap])\\.?m\\b\\.?)?(?![\\w:])", "gi", (m) =>
+    time(m, Number(m[1]), Number(m[2]), m[3]),
+  );
+  pass(w, "\\b(\\d{1,2})\\s?([ap])\\.?m\\b\\.?", "gi", (m) => time(m, Number(m[1]), undefined, m[2]));
+
+  // 4. Amounts: symbol prefix, code prefix, code/symbol suffix.
   const amount = (m: RegExpExecArray, num: string | undefined, currency: string | undefined): ExtractedFact | null => {
     const value = num === undefined ? undefined : canonicalDecimal(num);
     return value === undefined ? null : { type: "amount", value, currency, ...raw(m) };
@@ -239,7 +262,7 @@ export function extractFacts(input: string): ExtractedFact[] {
   pass(w, `(?<![\\d.,])${NUM_RE}\\s?${CODE_RE}\\b`, "g", (m) => amount(m, m[1], m[2]));
   pass(w, `(?<![\\d.,])${NUM_RE}\\s?(€|£)`, "g", (m) => amount(m, m[1], SYMBOLS[m[2] ?? ""]));
 
-  // 4. Identifiers: "#1042", "PP-D-12345", "1Z999AA10123456784", "9400111899223817421234".
+  // 5. Identifiers: "#1042", "PP-D-12345", "1Z999AA10123456784", "9400111899223817421234".
   pass(w, "(?<![A-Za-z0-9#-])#?[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*", "g", (m) => {
     const token = m[0];
     const core = token.replace(/^#/, "").replace(/-/g, "");
@@ -254,10 +277,10 @@ export function extractFacts(input: string): ExtractedFact[] {
     return isId ? { type: "identifier", id: normaliseIdentifier(token), ...raw(m) } : null;
   });
 
-  // 5. Carriers.
+  // 6. Carriers.
   for (const c of CARRIERS) pass(w, c.re.source, c.re.flags, (m) => ({ type: "carrier", carrier: c.carrier, ...raw(m) }));
 
-  // 6. Remaining bare numbers ("3 items", "1,250").
+  // 7. Remaining bare numbers ("3 items", "1,250").
   pass(w, "(?<![\\w.,])(\\d{1,3}(?:,\\d{3})+(?:\\.\\d+)?|\\d+(?:\\.\\d+)?)(?![\\w]|[.,]\\d)", "g", (m) => {
     const value = canonicalDecimal(m[1] ?? "");
     return value === undefined ? null : { type: "number", value, ...raw(m) };

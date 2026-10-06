@@ -2,8 +2,10 @@ import { canonicalJson, sha256Hex } from "./hash.js";
 import type { EvidenceRecord } from "./types.js";
 
 // Evidence records (SPEC §4). The id is a stable hash of (source, kind, ref,
-// value), so re-fetching the same fact yields the same id and citations in
-// cached drafts stay valid.
+// value, occurredAt), so re-fetching the same fact yields the same id and
+// citations in cached drafts stay valid. occurredAt is part of the identity:
+// a carrier can report "In transit" for the same parcel on Oct 3 and Oct 4,
+// and those are two facts, not one.
 //
 // Conventions adapters must follow, so the checklist and verifier can use them:
 //   fulfilment     ref = tracking number, label/value name the carrier
@@ -12,11 +14,13 @@ import type { EvidenceRecord } from "./types.js";
 //                  e.g. { ref: "1Z999AA10123456784", label: "UPS scan", value: "Delivered, front door" }
 //   refund         ref = PayPal refund id
 //   transaction    ref = PayPal transaction / capture id, value = amount text, e.g. "84.00 USD"
+// Money values always carry their currency ("84.00 USD", not 84): a claim
+// that names a currency is only verified against a record that names one.
 
 export type NewEvidenceRecord = Omit<EvidenceRecord, "id">;
 
-export function evidenceId(r: Pick<EvidenceRecord, "source" | "kind" | "ref" | "value">): string {
-  return `ev_${sha256Hex(canonicalJson([r.source, r.kind, r.ref, r.value])).slice(0, 16)}`;
+export function evidenceId(r: Pick<EvidenceRecord, "source" | "kind" | "ref" | "value" | "occurredAt">): string {
+  return `ev_${sha256Hex(canonicalJson([r.source, r.kind, r.ref, r.value, r.occurredAt ?? null])).slice(0, 16)}`;
 }
 
 export function makeEvidenceRecord(r: NewEvidenceRecord): EvidenceRecord {

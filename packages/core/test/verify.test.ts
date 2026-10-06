@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildChecklist } from "../src/checklist.js";
 import type { CaseFile } from "../src/types.js";
 import { applyMerchantEdit, draftHash, isApprovalValid, verifyDraft, type DraftInput } from "../src/verify.js";
+import { makeEvidenceRecord } from "../src/evidence.js";
 import { buyerMsg, delivered, evidenceMap, order, refund, shipment, tx } from "./fixtures.js";
 
 const INR = "MERCHANDISE_OR_SERVICE_NOT_RECEIVED";
@@ -96,6 +97,38 @@ describe("verifyDraft — claims", () => {
   });
 });
 
+describe("verifyDraft — times, currency, time zones", () => {
+  // delivered.occurredAt = 2026-10-06T19:42:00Z = 2:42pm in Chicago (CDT, UTC−5).
+  it("checks clock times against occurredAt, in the merchant's zone when given", () => {
+    const local = draft([["UPS delivered it at 2:42pm on Oct 6, 2026.", [delivered.id]]]);
+    expect(verifyDraft(local, evidenceMap, checklist, { timeZone: "America/Chicago" }).removed).toEqual([]);
+    expect(verifyDraft(local, evidenceMap, checklist).removed[0]?.reason).toBe('Time "2:42pm" does not match the cited evidence');
+    const utc = draft([["UPS delivered it at 19:42 on Oct 6, 2026.", [delivered.id]]]);
+    expect(verifyDraft(utc, evidenceMap, checklist).removed).toEqual([]);
+  });
+
+  it("an hour-only time matches the hour; a wrong time is dropped", () => {
+    const opts = { timeZone: "America/Chicago" };
+    expect(verifyDraft(draft([["Delivered around 2pm.", [delivered.id]]]), evidenceMap, checklist, opts).removed).toEqual([]);
+    expect(verifyDraft(draft([["Delivered at 9:15am.", [delivered.id]]]), evidenceMap, checklist, opts).removed).toHaveLength(1);
+  });
+
+  it("an invalid time zone is a warning, never a crash", () => {
+    const v = verifyDraft(draft([["Delivered on Oct 6, 2026.", [delivered.id]]]), evidenceMap, checklist, { timeZone: "America/Chicgo" });
+    expect(v.claims).toHaveLength(1);
+    expect(v.warnings).toEqual(['Unknown time zone "America/Chicgo"; dates and times were checked in UTC only.']);
+  });
+
+  it("a claimed currency needs a record that names a currency", () => {
+    const bare = makeEvidenceRecord({ source: "merchant_demo", kind: "order", ref: "1043", label: "Order total", value: 84, fetchedAt: "x" });
+    const ev = { ...evidenceMap, [bare.id]: bare };
+    expect(verifyDraft(draft([["The buyer paid €84.", [bare.id]]]), ev, checklist).removed[0]?.reason).toBe(
+      'Amount "€84" does not match the cited evidence',
+    );
+    expect(verifyDraft(draft([["The order total was 84.", [bare.id]]]), ev, checklist).removed).toEqual([]);
+  });
+});
+
 describe("verifyDraft — structured evidence", () => {
   it("keeps real tracking info, drops invented tracking and refund ids", () => {
     const v = verifyDraft(
@@ -121,6 +154,30 @@ describe("verifyDraft — structured evidence", () => {
       'Carrier "FedEx" not named in the shipment record for 1Z999AA10123456784',
       'Refund id "FAKE-REFUND-1" not found in any refund record',
     ]);
+  });
+
+  it("sends carriers PayPal doesn't list as OTHER + carrierOther", () => {
+    const evri = makeEvidenceRecord({
+      source: "merchant_demo",
+      kind: "fulfilment",
+      ref: "H01ABC1234567890",
+      label: "Shipped via Evri",
+      value: "Evri H01ABC1234567890",
+      fetchedAt: "x",
+    });
+    const ev = { ...evidenceMap, [evri.id]: evri };
+    const expected = { trackingInfo: [{ carrier: "OTHER", carrierOther: "Evri", number: "H01ABC1234567890" }] };
+    for (const t of [{ carrier: "Evri", number: "H01ABC1234567890" }, { carrier: "OTHER", carrierOther: "Evri", number: "H01ABC1234567890" }]) {
+      expect(verifyDraft(draft([], { evidenceInfo: { trackingInfo: [t] } }), ev, checklist).evidenceInfo).toEqual(expected);
+    }
+    const v = verifyDraft(draft([], { evidenceInfo: { trackingInfo: [{ carrier: "OTHER", number: "H01ABC1234567890" }] } }), ev, checklist);
+    expect(v.evidenceInfo).toBeUndefined();
+    expect(v.removed).toHaveLength(1);
+  });
+
+  it("normalises known carrier names to PayPal enum values", () => {
+    const v = verifyDraft(draft([], { evidenceInfo: { trackingInfo: [{ carrier: "ups", number: "1Z999AA10123456784" }] } }), evidenceMap, checklist);
+    expect(v.evidenceInfo?.trackingInfo).toEqual([{ carrier: "UPS", number: "1Z999AA10123456784" }]);
   });
 
   it("only attaches records that have a document", () => {
@@ -154,6 +211,34 @@ describe("verifyDraft — coverage (every requested type addressed or a gap)", (
         gap: "Records on file support PROOF_OF_FULFILLMENT, but no verified claim or attachment uses them.",
       },
     ]);
+  });
+
+  it("respects PayPal's routes: UNAUTHORISED fulfilment only counts as tracking info", () => {
+    const unauth = buildChecklist("UNAUTHORISED", requested, Object.values(evidenceMap));
+    const notesOnly = verifyDraft(draft([["Shipped via UPS, tracking 1Z999AA10123456784.", [shipment.id]]]), evidenceMap, unauth);
+    expect(notesOnly.coverage).toEqual([
+      {
+        evidenceType: "PROOF_OF_FULFILLMENT",
+        status: "gap",
+        gap: "PayPal accepts PROOF_OF_FULFILLMENT for this dispute reason only as carrier and tracking number (tracking info); mentioning it in the notes doesn't count.",
+      },
+    ]);
+    const withTracking = verifyDraft(
+      draft([["Shipped via UPS, tracking 1Z999AA10123456784.", [shipment.id]]], {
+        evidenceInfo: { trackingInfo: [{ carrier: "UPS", number: "1Z999AA10123456784" }] },
+      }),
+      evidenceMap,
+      unauth,
+    );
+    expect(withTracking.coverage[0]?.status).toBe("addressed");
+  });
+
+  it("a refund mentioned only in the notes is not proof of refund", () => {
+    const refundChecklist = buildChecklist(INR, [{ evidenceType: "PROOF_OF_REFUND", source: "REQUESTED_FROM_SELLER" }], [refund]);
+    const notesOnly = verifyDraft(draft([["We refunded 10.00 USD.", [refund.id]]]), evidenceMap, refundChecklist);
+    expect(notesOnly.coverage[0]).toMatchObject({ status: "gap", gap: expect.stringMatching(/only as refund ID/) });
+    const withId = verifyDraft(draft([], { evidenceInfo: { refundIds: [refund.ref] } }), evidenceMap, refundChecklist);
+    expect(withId.coverage[0]?.status).toBe("addressed");
   });
 
   it("carries the checklist gap through", () => {

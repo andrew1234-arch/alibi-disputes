@@ -44,7 +44,7 @@ Primary source for "answered (docs)": PayPal's official OpenAPI spec
 - `dispute_life_cycle_stage`: `INQUIRY`, `CHARGEBACK`, `PRE_ARBITRATION`, `ARBITRATION`.
 - `reason`: `MERCHANDISE_OR_SERVICE_NOT_RECEIVED`, `MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED`, `UNAUTHORISED`, `CREDIT_NOT_PROCESSED`, `DUPLICATE_TRANSACTION`, `INCORRECT_AMOUNT`, `PAYMENT_BY_OTHER_MEANS`, `CANCELED_RECURRING_BILLING`, `PROBLEM_WITH_REMITTANCE`, `OTHER`.
 - Requested evidence: `evidences[]` entries with `source = REQUESTED_FROM_SELLER`.
-- `tracking_info`: required `carrier_name` (enum, 1257 values incl. `UPS`, `USPS`, `FEDEX`, `DHL`, `ROYAL_MAIL`, `NIPOST_NG`; `OTHER` + `carrier_name_other`) and `tracking_number`; optional `tracking_url`.
+- `tracking_info`: required `carrier_name` (enum, 1257 values. Every value Alibi emits was checked present on 2026-10-06: `UPS`, `USPS`, `FEDEX`, `DHL`, `ROYAL_MAIL`, `CANADA_POST`, `AUSTRALIA_POST`, `DPD`, `GLS`, `ONTRAC`, `NIPOST_NG`, `OTHER`. `carrier_name_other` (max 2000) is mandatory when the carrier is `OTHER`) and `tracking_number`; optional `tracking_url`.
 - `provide-evidence` is only possible when the dispute's HATEOAS links include `provide-evidence` (spec description).
 
 ## Still to answer
