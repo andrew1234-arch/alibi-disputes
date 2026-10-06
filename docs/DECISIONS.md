@@ -21,6 +21,24 @@ If the variable is unset, submissions are disabled. Only the literal `false` ena
 ## ADR-006 — require-evidence in the probe is opt-in (2026-10-06)
 Even sandbox state changes need an explicit `--require-evidence` flag. The default probe run is read-only.
 
+## ADR-007 — Verifier is strict and per-claim (2026-10-06)
+Each fact in a claim must match the records *that claim cites*, not just any record in the case. This stops a claim borrowing a real tracking number to support an invented delivery date. One unsupported fact drops the whole claim, and every miss is listed in the reason.
+Consequences, all deliberate:
+- Derived numbers ("arrived 3 days later") are dropped. The drafter must state facts, not arithmetic.
+- Day/month-ambiguous numeric dates (02/10/2026) are dropped. The drafter writes "Oct 2, 2026".
+- A date also matches the record's calendar date in the merchant's time zone when one is given, because a 01:15 UTC event is still "yesterday" in Chicago.
+- `$` is compatible with any dollar currency. An explicit mismatch (€ vs USD) drops the claim.
+- Not covered deterministically: numbers written as words, item names, tracking numbers with internal spaces. The optional LLM check (SPEC §5.5 step 5) is the backstop.
+
+## ADR-008 — Claim order is priority (2026-10-06)
+`DraftClaim` has no priority field. Array order is the priority, and when the notes exceed PayPal's 2000-character limit, claims are dropped whole from the end. The drafter prompt (M3) must order claims most-important first.
+
+## ADR-009 — Hashing in core uses node:crypto (2026-10-06)
+Evidence ids (`ev_` + 16 hex chars of SHA-256 over source/kind/ref/value) and draft hashes (SHA-256 over canonical JSON) are computed server-side only. That keeps `core` pure: deterministic, with no I/O.
+
+## ADR-010 — Unmapped requested evidence types become manual-review gaps (2026-10-06)
+If PayPal requests a type the reason map doesn't list for that reason, the checklist shows a gap telling the merchant to review it manually. It is never dropped and never forced into a type we know.
+
 ## Hooks proof (2026-10-06)
 - **pre-commit** (`pnpm typecheck`): staged `packages/core/src/zz-broken.ts` with `export const broken: number = "nope";` → commit refused, exit 1, `error TS2322: Type 'string' is not assignable to type 'number'`. File removed; nothing was committed.
 - **pre-push** (`pnpm build:all`): on a throwaway branch, added `import "./missing.css";` to `apps/web/app/page.tsx` (passes `tsc`, fails `next build`) and pushed to a scratch bare remote → push refused, exit 1, `Module not found: Can't resolve './missing.css'`. The remote received 0 refs. Branch and remote deleted.
