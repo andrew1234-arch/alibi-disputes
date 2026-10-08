@@ -3,13 +3,21 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": { "./read": "./src/read.ts", "./write": "./src/write.ts", "./sandbox": "./src/sandbox.ts" },
+  "exports": {
+    "./read": "./src/read.ts",
+    "./write": "./src/write.ts",
+    "./webhooks": "./src/webhooks.ts",
+    "./sandbox": "./src/sandbox.ts"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit",
     "test": "vitest run"
   },
-  "dependencies": { "@alibi/core": "workspace:*", "zod": "^4.6.5" },
+  "dependencies": {
+    "@alibi/core": "workspace:*",
+    "zod": "^4.6.5"
+  },
   "devDependencies": {
     "@types/node": "^22.20.5",
     "typescript": "~5.9.3",
