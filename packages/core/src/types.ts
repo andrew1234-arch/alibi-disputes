@@ -81,6 +81,18 @@ export interface CaseFile {
   };
   evidence: Record<string, EvidenceRecord>;
   removedByVerifier: { text: string; reason: string }[];
+  /** Who wrote the draft and strategy, for the audit trail and the UI ("drafted by …"). */
+  authoredBy?: {
+    drafter: "llm" | "template";
+    model?: string;
+    llmCalls: number;
+    /** Why the template was used instead of the LLM (budget, refusal, API error, LLM not configured). */
+    fallbackReason?: string;
+    /** The drafter's first attempt had claims the checker rejected, and it revised them. */
+    repaired?: boolean;
+    /** The model suggested a stronger stance than the evidence supports; it was lowered. */
+    stanceCapped?: boolean;
+  };
   approval?: { approvedAt: string; draftHash: string }; // approvalHash(): binds approval to the draft and the exact payload
   submission?: { submittedAt: string; paypalStatusAfter: string; requestId?: string };
   createdAt: string;

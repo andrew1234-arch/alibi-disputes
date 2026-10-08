@@ -63,6 +63,18 @@ const requireOperatorWhenWritable = (env: { DEMO_READONLY: boolean; ALIBI_OPERAT
  * it only exists after the deployed URL is registered with PayPal; without it
  * every webhook is refused, never accepted unverified.
  */
+const optionalString = z
+  .string()
+  .optional()
+  .transform((v) => (v ? v : undefined));
+
+/** The LLM is optional on the web server (template drafter without it), but key and model come as a pair. */
+const llmPair = (env: { ANTHROPIC_API_KEY?: string | undefined; ALIBI_MODEL?: string | undefined }, ctx: z.RefinementCtx) => {
+  if (Boolean(env.ANTHROPIC_API_KEY) !== Boolean(env.ALIBI_MODEL)) {
+    ctx.addIssue({ code: "custom", path: [env.ANTHROPIC_API_KEY ? "ALIBI_MODEL" : "ANTHROPIC_API_KEY"], message: "set ANTHROPIC_API_KEY and ALIBI_MODEL together (or neither, for the template drafter)" });
+  }
+};
+
 export const webEnvSchema = paypalEnvSchema.extend({
   DATABASE_URL: required,
   PAYPAL_WEBHOOK_ID: z
@@ -74,7 +86,14 @@ export const webEnvSchema = paypalEnvSchema.extend({
   // Bearer token for the merchant/operator actions (approve, submit, rebuild).
   ALIBI_OPERATOR_TOKEN: operatorToken,
   ALIBI_MERCHANT_TIME_ZONE: timeZone,
-}).superRefine(requireOperatorWhenWritable);
+  // M3: strategist + drafter. Without them every case uses the template drafter.
+  ANTHROPIC_API_KEY: optionalString,
+  ALIBI_MODEL: optionalString,
+  ALIBI_MAX_LLM_CALLS_PER_CASE: positiveInt(8),
+}).superRefine((env, ctx) => {
+  requireOperatorWhenWritable(env, ctx);
+  llmPair(env, ctx);
+});
 export type WebEnv = z.infer<typeof webEnvSchema>;
 
 export const appEnvSchema = paypalEnvSchema.extend({

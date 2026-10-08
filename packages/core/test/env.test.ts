@@ -52,6 +52,15 @@ describe("parseEnv", () => {
     expect(() => parseEnv(webEnvSchema, paypal)).toThrow(/DATABASE_URL/);
   });
 
+  it("LLM settings are optional on the web server but come as a pair", () => {
+    const web = { ...paypal, DATABASE_URL: "pglite://memory" };
+    expect(parseEnv(webEnvSchema, web).ANTHROPIC_API_KEY).toBeUndefined();
+    expect(parseEnv(webEnvSchema, web).ALIBI_MAX_LLM_CALLS_PER_CASE).toBe(8);
+    expect(() => parseEnv(webEnvSchema, { ...web, ANTHROPIC_API_KEY: "k" })).toThrow(/ALIBI_MODEL: set ANTHROPIC_API_KEY and ALIBI_MODEL together/);
+    expect(() => parseEnv(webEnvSchema, { ...web, ALIBI_MODEL: "claude-opus-5-5" })).toThrow(/ANTHROPIC_API_KEY/);
+    expect(parseEnv(webEnvSchema, { ...web, ANTHROPIC_API_KEY: "k", ALIBI_MODEL: "claude-opus-5-5" }).ALIBI_MODEL).toBe("claude-opus-5-5");
+  });
+
   it("requires a strong operator token once submissions are on", () => {
     const web = { ...paypal, DATABASE_URL: "pglite://memory", DEMO_READONLY: "false" };
     expect(() => parseEnv(webEnvSchema, web)).toThrow(/ALIBI_OPERATOR_TOKEN: is required when DEMO_READONLY=false/);

@@ -10,6 +10,7 @@ import {
   type EvidenceRecord,
   type ReasonEvidenceMap,
   type RequestedEvidence,
+  type Stance,
   type TrackingInfo,
 } from "@alibi/core";
 import { indexEvidence, timeline, verifyDraft, type DraftInput, type VerifyOptions } from "@alibi/core/server";
@@ -44,32 +45,53 @@ export interface DisputeFacts {
 }
 
 /**
- * Builds a full CaseFile: evidence, timeline, checklist, baseline stance, and a
- * verified draft. `draft` defaults to the template drafter; M3's LLM drafter
- * passes its own, and either way it goes through the verifier.
+ * Step 1 of assembly: evidence, timeline and checklist. Pure. The agent runs
+ * its (async) strategist and drafter on these parts, then calls finishCaseFile.
+ */
+export function prepareCase(facts: DisputeFacts, records: readonly EvidenceRecord[]): CaseParts {
+  const engine = createCaseEngine(facts.reason);
+  engine.ingest([...records]);
+  const ordered = engine.timeline();
+  return { facts, records: ordered, evidence: indexEvidence(ordered), checklist: engine.satisfy(facts.requested, REASON_EVIDENCE_MAP) };
+}
+
+/**
+ * Step 2: verify the draft (whoever wrote it) and the strategy's reasons,
+ * and assemble the CaseFile. Reasons are claims too: a reason that cites a
+ * fact its records don't support is removed, like any draft claim.
+ */
+export function finishCaseFile(
+  parts: CaseParts,
+  draft: DraftInput,
+  opts: { now: Date; verify?: VerifyOptions; strategy?: { stance: Stance; reasons: DraftClaim[] } },
+): CaseFile {
+  const { facts, records, evidence, checklist } = parts;
+  const v = verifyDraft(draft, evidence, checklist, opts.verify);
+  const strategy = opts.strategy ?? { stance: baselineStance(checklist), reasons: [] };
+  const reasons = verifyDraft({ claims: strategy.reasons, documents: [] }, evidence, [], opts.verify);
+  return {
+    ...facts,
+    timeline: records.map((r) => r.id),
+    checklist,
+    strategy: { stance: strategy.stance, reasons: reasons.claims },
+    draft: { claims: v.claims, notes: v.notes, ...(v.evidenceInfo ? { evidenceInfo: v.evidenceInfo } : {}), documents: v.documents },
+    evidence,
+    removedByVerifier: [...v.removed, ...reasons.removed.map((r) => ({ ...r, reason: `Strategy reason: ${r.reason}` }))],
+    createdAt: opts.now.toISOString(),
+  };
+}
+
+/**
+ * Builds a full CaseFile synchronously with a sync drafter (the template by
+ * default) and the baseline stance. Used by tests and as the no-LLM path.
  */
 export function assembleCaseFile(
   facts: DisputeFacts,
   records: readonly EvidenceRecord[],
   opts: { now: Date; draft?: (parts: CaseParts) => DraftInput; verify?: VerifyOptions },
 ): CaseFile {
-  const engine = createCaseEngine(facts.reason);
-  engine.ingest([...records]);
-  const ordered = engine.timeline();
-  const evidence = indexEvidence(ordered);
-  const checklist = engine.satisfy(facts.requested, REASON_EVIDENCE_MAP);
-  const parts: CaseParts = { facts, records: ordered, evidence, checklist };
-  const v = verifyDraft((opts.draft ?? templateDraft)(parts), evidence, checklist, opts.verify);
-  return {
-    ...facts,
-    timeline: ordered.map((r) => r.id),
-    checklist,
-    strategy: { stance: baselineStance(checklist), reasons: [] },
-    draft: { claims: v.claims, notes: v.notes, ...(v.evidenceInfo ? { evidenceInfo: v.evidenceInfo } : {}), documents: v.documents },
-    evidence,
-    removedByVerifier: v.removed,
-    createdAt: opts.now.toISOString(),
-  };
+  const parts = prepareCase(facts, records);
+  return finishCaseFile(parts, (opts.draft ?? templateDraft)(parts), opts);
 }
 
 export interface CaseParts {
