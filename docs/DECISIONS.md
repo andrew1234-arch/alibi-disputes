@@ -118,6 +118,17 @@ Webhooks record the event id and queue the rebuild in one transaction too, so an
 ## ADR-027 — One process per on-disk PGlite (2026-10-08, review fix)
 `pglite://<dir>` takes a pid lock file (`<dir>.alibi-lock`). A second process, such as `seed:demo` while `web:dev` runs, fails with a clear message instead of corrupting the data. A lock left by a dead process is taken over. Production uses Postgres and is unaffected.
 
+## ADR-029 — LLM strategist and drafter (2026-10-08, M3)
+- **Loop** (`packages/agent`, readable top to bottom): prepare case (pure) → strategist (LLM) → drafter (LLM) → checker → one repair round if the checker removed anything → final verify (`finishCaseFile`). The repair prompt lists exactly what was rejected and why.
+- **Port and adapter.** The agent talks to an `Llm` interface (`llm.ts`); `anthropic.ts` implements it with `client.beta.messages.parse` and `betaZodOutputFormat`. The output is re-validated with the same zod schema (CLAUDE §1.6). Thinking is adaptive, effort `medium`. Refusals are checked before content is read. `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`) is sent only to models that accept it.
+- **Guards.**
+  - Strategy reasons are claims: they cite evidence and are verified, and a bad reason is removed and labelled "Strategy reason:".
+  - The model's stance is capped at the evidence-based baseline (`capStance`), so it can be more cautious, never more aggressive.
+  - The prompt carries record data only (ids, labels, values, `hasDocument`), never document URLs or credentials. Buyer text is marked as data.
+- **Budget and fallback.** `ALIBI_MAX_LLM_CALLS_PER_CASE` (default 8; a case uses 2–3). Any `LlmError` (budget, refusal, truncation, invalid output, API error) falls back to the template drafter, which passes the verifier by construction. Other errors are bugs and propagate. `case.authoredBy` records which path ran, the model, the call count, whether the draft was repaired, and whether the stance was capped.
+- **Configuration.** `ANTHROPIC_API_KEY` and `ALIBI_MODEL` are optional on the web server but must be set together; without them every case uses the template. The recommended model is `claude-opus-5-5`.
+- **Poirot port.** Not started (SPEC §6.2: only after Poirot is submitted). `@alibi/casefile` keeps its in-repo engine behind `CaseEngine`.
+
 ## Hooks proof (2026-10-06)
 - **pre-commit** (`pnpm typecheck`): staged `packages/core/src/zz-broken.ts` with `export const broken: number = "nope";` → commit refused, exit 1, `error TS2322: Type 'string' is not assignable to type 'number'`. File removed; nothing was committed.
 - **pre-push** (`pnpm build:all`): on a throwaway branch, added `import "./missing.css";` to `apps/web/app/page.tsx` (passes `tsc`, fails `next build`) and pushed to a scratch bare remote → push refused, exit 1, `Module not found: Can't resolve './missing.css'`. The remote received 0 refs. Branch and remote deleted.

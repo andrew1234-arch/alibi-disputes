@@ -26,6 +26,7 @@ export PAYPAL_CLIENT_ID=stub PAYPAL_CLIENT_SECRET=stub PAYPAL_TEST_MODE=true \
        PAYPAL_API_BASE=http://127.0.0.1:4010 DATABASE_URL=pglite://./.data/stub
 pnpm seed:demo --link inr-delivered=PP-D-STUB-1
 export ALIBI_OPERATOR_TOKEN=$(openssl rand -hex 32)      # approve/submit/build need it when submissions are on
+export ANTHROPIC_API_KEY=… ALIBI_MODEL=claude-opus-5-5   # optional: Claude strategist + drafter (template drafter without)
 DEMO_READONLY=false pnpm web:dev                         # other terminal, same env
 pnpm case build PP-D-STUB-1 && pnpm case approve PP-D-STUB-1 && pnpm case submit PP-D-STUB-1
 ```
