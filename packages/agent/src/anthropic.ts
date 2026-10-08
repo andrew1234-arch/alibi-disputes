@@ -1,20 +1,24 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
-import { LlmError, type Llm, type LlmRequest } from "./llm";
+import { LlmError, type Llm, type LlmRequest, type LlmResult } from "./llm";
 
 // Anthropic adapter for the LLM port (the only network code in @alibi/agent
 // besides the read-only PayPal client it's handed).
 //
-//   - Structured output: the zod schema is sent as the output format, and the
-//     SDK parses the reply; we re-validate with the same schema anyway (CLAUDE §1.6).
-//   - Thinking: adaptive (the default on current models); `effort` controls depth.
-//     Strategy and drafting are judgment work, so "medium" by default.
-//   - Refusals: checked before reading content. On models that support it, the
-//     server-side fallback (`fallbacks: "default"`) re-runs a declined request on
-//     Anthropic's recommended substitute model.
-//   - Errors: the SDK retries 429/5xx/connection errors itself (maxRetries);
-//     whatever still fails becomes an LlmError and the agent falls back to the
-//     template drafter.
+//   - Structured output: the zod schema is sent as the output format. We read
+//     the reply ourselves, in order: refusal → truncation → JSON → zod. (The
+//     SDK's parse() helper would throw a generic error on a truncated reply
+//     before we could see stop_reason.)
+//   - Thinking: adaptive (the default on current models); `effort` controls
+//     depth. Current models reject sampling parameters, so there is no
+//     temperature: repeatability comes from reusing the stored draft when the
+//     case input is unchanged (agent/index.ts), and correctness from the checker.
+//   - Refusals: on models that support it, the server-side fallback
+//     (`fallbacks: "default"`) re-runs a declined request on Anthropic's
+//     recommended substitute; the model that answered is returned and recorded.
+//   - Errors: the SDK retries 429/5xx/connection errors once; API errors become
+//     LlmError("api") and the agent falls back to the template drafter.
+//     Anything else is a bug and propagates.
 
 /** Models that accept `fallbacks: "default"` on the Claude API. */
 const DEFAULT_FALLBACK_MODELS = new Set(["claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5"]);
@@ -25,20 +29,21 @@ export interface AnthropicLlmOptions {
   model: string;
   effort?: "low" | "medium" | "high" | "xhigh" | "max";
   maxTokens?: number;
-  /** Tests inject a client pointed at a stub. */
+  /** Tests inject a fake client. */
   client?: Anthropic;
 }
 
 export function createAnthropicLlm(opts: AnthropicLlmOptions): Llm {
-  const client = opts.client ?? new Anthropic({ apiKey: opts.apiKey, maxRetries: 2, timeout: 120_000 });
+  // Bounded so one slow case can't stall the rebuild queue for long: 60 s × 2 attempts.
+  const client = opts.client ?? new Anthropic({ apiKey: opts.apiKey, maxRetries: 1, timeout: 60_000 });
   const fallback = DEFAULT_FALLBACK_MODELS.has(opts.model);
 
   return {
     model: opts.model,
-    async complete<T>(req: LlmRequest<T>): Promise<T> {
+    async complete<T>(req: LlmRequest<T>): Promise<LlmResult<T>> {
       let res;
       try {
-        res = await client.beta.messages.parse({
+        res = await client.beta.messages.create({
           model: opts.model,
           max_tokens: opts.maxTokens ?? 16_000,
           system: req.system,
@@ -48,21 +53,26 @@ export function createAnthropicLlm(opts: AnthropicLlmOptions): Llm {
           ...(fallback ? { betas: [FALLBACK_BETA], fallbacks: "default" as const } : {}),
         });
       } catch (e) {
-        if (e instanceof LlmError) throw e;
-        // The SDK throws on a reply that doesn't parse against the schema.
-        if (e instanceof Anthropic.APIError) throw new LlmError("api", `${req.purpose}: Anthropic API ${e.status ?? "error"}: ${e.message}`);
-        throw new LlmError("invalid_output", `${req.purpose}: ${e instanceof Error ? e.message : String(e)}`);
+        if (e instanceof Anthropic.APIError) throw new LlmError("api", `Anthropic API ${e.status ?? "error"}: ${e.message}`, req.purpose);
+        throw e;
       }
       if (res.stop_reason === "refusal") {
-        const category = res.stop_details?.category ?? "unspecified";
-        throw new LlmError("refusal", `${req.purpose}: the model declined (category ${category})`);
+        throw new LlmError("refusal", `the model declined (category ${res.stop_details?.category ?? "unspecified"})`, req.purpose);
       }
-      if (res.stop_reason === "max_tokens") throw new LlmError("truncated", `${req.purpose}: output hit max_tokens`);
-      const checked = req.schema.safeParse(res.parsed_output);
+      if (res.stop_reason === "max_tokens") throw new LlmError("truncated", "output hit max_tokens", req.purpose);
+
+      const text = res.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("");
+      let json: unknown;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        throw new LlmError("invalid_output", "reply is not JSON", req.purpose);
+      }
+      const checked = req.schema.safeParse(json);
       if (!checked.success) {
-        throw new LlmError("invalid_output", `${req.purpose}: ${checked.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
+        throw new LlmError("invalid_output", checked.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "), req.purpose);
       }
-      return checked.data;
+      return { output: checked.data, model: res.model };
     },
   };
 }

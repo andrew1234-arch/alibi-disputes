@@ -9,14 +9,16 @@ import { LlmError } from "../src/llm";
 
 const schema = z.object({ stance: z.enum(["fight", "consider_conceding"]) });
 
-function fakeClient(reply: Record<string, unknown>) {
+/** reply.text becomes the text block; other fields are copied onto the message. */
+function fakeClient(reply: { text?: string } & Record<string, unknown>) {
   const calls: Record<string, unknown>[] = [];
+  const { text, ...rest } = reply;
   const client = {
     beta: {
       messages: {
-        parse: async (params: Record<string, unknown>) => {
+        create: async (params: Record<string, unknown>) => {
           calls.push(params);
-          return reply;
+          return { model: params.model, content: text === undefined ? [] : [{ type: "text", text }], ...rest };
         },
       },
     },
@@ -28,9 +30,9 @@ const req = { purpose: "strategist" as const, system: "sys", user: "case", schem
 
 describe("createAnthropicLlm", () => {
   it("sends adaptive thinking, effort and the zod output format; opts into default fallbacks on supported models", async () => {
-    const { client, calls } = fakeClient({ stop_reason: "end_turn", parsed_output: { stance: "fight" } });
+    const { client, calls } = fakeClient({ stop_reason: "end_turn", text: '{"stance":"fight"}' });
     const llm = createAnthropicLlm({ apiKey: "k", model: "claude-opus-5-5", client });
-    expect(await llm.complete(req)).toEqual({ stance: "fight" });
+    expect(await llm.complete(req)).toEqual({ output: { stance: "fight" }, model: "claude-opus-5-5" });
     expect(calls[0]).toMatchObject({
       model: "claude-opus-5-5",
       system: "sys",
@@ -43,18 +45,18 @@ describe("createAnthropicLlm", () => {
   });
 
   it("doesn't send fallbacks to models that don't accept the default form", async () => {
-    const { client, calls } = fakeClient({ stop_reason: "end_turn", parsed_output: { stance: "fight" } });
+    const { client, calls } = fakeClient({ stop_reason: "end_turn", text: '{"stance":"fight"}' });
     await createAnthropicLlm({ apiKey: "k", model: "claude-haiku-5-5", client }).complete(req);
     expect(calls[0]).not.toHaveProperty("fallbacks");
     expect(calls[0]).not.toHaveProperty("betas");
   });
 
   it("refusal, truncation and off-schema output are LlmErrors, never partial results", async () => {
-    const cases: [Record<string, unknown>, string][] = [
-      [{ stop_reason: "refusal", stop_details: { category: "cyber" }, parsed_output: null }, "refusal"],
-      [{ stop_reason: "max_tokens", parsed_output: null }, "truncated"],
-      [{ stop_reason: "end_turn", parsed_output: { stance: "win" } }, "invalid_output"],
-      [{ stop_reason: "end_turn", parsed_output: null }, "invalid_output"],
+    const cases: [{ text?: string } & Record<string, unknown>, string][] = [
+      [{ stop_reason: "refusal", stop_details: { category: "cyber" }, text: '{"stance":' }, "refusal"],
+      [{ stop_reason: "max_tokens", text: '{"stance":"fi' }, "truncated"], // half-written JSON: still "truncated"
+      [{ stop_reason: "end_turn", text: '{"stance":"win"}' }, "invalid_output"],
+      [{ stop_reason: "end_turn", text: "not json" }, "invalid_output"],
     ];
     for (const [reply, kind] of cases) {
       const { client } = fakeClient(reply);
@@ -64,5 +66,13 @@ describe("createAnthropicLlm", () => {
       expect(err).toBeInstanceOf(LlmError);
       expect((err as LlmError).kind).toBe(kind);
     }
+  });
+
+  it("reports the model that answered, and lets non-API errors (bugs) propagate", async () => {
+    const { client } = fakeClient({ stop_reason: "end_turn", text: '{"stance":"fight"}', model: "claude-opus-4-8" });
+    const r = await createAnthropicLlm({ apiKey: "k", model: "claude-opus-5-5", client }).complete(req);
+    expect(r.model).toBe("claude-opus-4-8");
+    const broken = { beta: { messages: { create: async () => Promise.reject(new TypeError("bug")) } } } as unknown as Anthropic;
+    await expect(createAnthropicLlm({ apiKey: "k", model: "claude-opus-5-5", client: broken }).complete(req)).rejects.toBeInstanceOf(TypeError);
   });
 });

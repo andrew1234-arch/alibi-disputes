@@ -29,9 +29,12 @@ export function capStance(model: Stance, baseline: Stance): Stance {
   return RANK[model] <= RANK[baseline] ? model : baseline;
 }
 
-export async function runStrategist(parts: CaseParts, llm: Llm): Promise<{ stance: Stance; reasons: DraftClaim[]; capped: boolean }> {
-  const out = await llm.complete({ purpose: "strategist", system: STRATEGIST_SYSTEM, user: caseInput(parts), schema: strategySchema });
+export async function runStrategist(
+  parts: CaseParts,
+  llm: Llm,
+): Promise<{ stance: Stance; reasons: DraftClaim[]; capped: boolean; model: string }> {
+  const { output: out, model } = await llm.complete({ purpose: "strategist", system: STRATEGIST_SYSTEM, user: caseInput(parts), schema: strategySchema });
   const baseline = baselineStance(parts.checklist);
   const stance = capStance(out.stance, baseline);
-  return { stance, reasons: out.reasons.slice(0, 4), capped: stance !== out.stance };
+  return { stance, reasons: out.reasons.slice(0, 4), capped: stance !== out.stance, model };
 }

@@ -84,7 +84,14 @@ export interface CaseFile {
   /** Who wrote the draft and strategy, for the audit trail and the UI ("drafted by …"). */
   authoredBy?: {
     drafter: "llm" | "template";
+    /** Configured model. */
     model?: string;
+    /** Models that actually answered (a server-side refusal fallback can substitute another). */
+    answeredBy?: string[];
+    /** Hash of exactly what the LLM was shown; an unchanged input reuses this draft on rebuild. */
+    inputHash?: string;
+    /** This build reused the stored LLM draft (input unchanged), making no LLM calls. */
+    reused?: boolean;
     llmCalls: number;
     /** Why the template was used instead of the LLM (budget, refusal, API error, LLM not configured). */
     fallbackReason?: string;

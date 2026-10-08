@@ -1,8 +1,9 @@
 import { baselineStance, SELLER_RESPONSE_STATUS, SELLER_SOURCE, type CaseFile } from "@alibi/core";
-import { approvalHash, type DraftInput, type VerifyOptions } from "@alibi/core/server";
+import { approvalHash, sha256Hex, type DraftInput, type VerifyOptions } from "@alibi/core/server";
 import { finishCaseFile, prepareCase, templateDraft, type CaseParts } from "@alibi/casefile";
 import { runDrafter } from "./drafter";
 import { budgeted, CallBudget, LlmError, type Llm } from "./llm";
+import { caseInput } from "./prompts";
 import { runStrategist } from "./strategist";
 
 export { createAnthropicLlm, type AnthropicLlmOptions } from "./anthropic";
@@ -39,6 +40,13 @@ export interface AgentDeps {
   maxLlmCalls?: number;
   /** Fixed sync drafter (tests). Takes precedence over `llm`. */
   draft?: (parts: CaseParts) => DraftInput;
+  /**
+   * The stored case, if any. When the LLM would be shown exactly the same input
+   * as last time, its draft and strategy are reused instead of asking again:
+   * LLM output varies run to run, so re-drafting on every webhook would replace
+   * the text the merchant approved (and lapse the approval) for no reason.
+   */
+  previous?: CaseFile | undefined;
 }
 
 type Log = (step: string, detail?: Record<string, unknown>) => Promise<void> | void;
@@ -49,29 +57,48 @@ async function draftWithLlm(parts: CaseParts, deps: AgentDeps, verify: VerifyOpt
     await log("llm_skipped", { reason: "LLM not configured" });
     return { draft: templateDraft(parts), authoredBy: { drafter: "template" as const, llmCalls: 0, fallbackReason: "LLM not configured" } };
   }
+  const inputHash = sha256Hex(caseInput(parts));
+  const prev = deps.previous;
+  if (prev?.authoredBy?.drafter === "llm" && prev.authoredBy.inputHash === inputHash) {
+    // Same input as the stored LLM draft: reuse it. finishCaseFile re-verifies it.
+    await log("llm_reused", { inputHash, model: prev.authoredBy.model });
+    return {
+      draft: { claims: prev.draft.claims, ...(prev.draft.evidenceInfo ? { evidenceInfo: prev.draft.evidenceInfo } : {}), documents: prev.draft.documents },
+      strategy: prev.strategy,
+      authoredBy: { ...prev.authoredBy, llmCalls: 0, reused: true },
+    };
+  }
+
   const budget = new CallBudget(deps.maxLlmCalls ?? 8);
   const llm = budgeted(deps.llm, budget);
   const describe = (e: LlmError) => `${e.kind}: ${e.message}`;
+  const answeredBy: string[] = [];
 
   let strategy: Awaited<ReturnType<typeof runStrategist>> | undefined;
   try {
     strategy = await runStrategist(parts, llm);
-    await log("strategist", { model: llm.model, stance: strategy.stance, reasons: strategy.reasons.length, capped: strategy.capped });
+    answeredBy.push(strategy.model);
+    await log("strategist", { model: strategy.model, stance: strategy.stance, reasons: strategy.reasons.length, capped: strategy.capped });
   } catch (e) {
     if (!(e instanceof LlmError)) throw e;
-    await log("llm_fallback", { step: "strategist", error: describe(e) });
+    await log("llm_fallback", { step: e.purpose ?? "strategist", error: describe(e) });
   }
+  const strategyOut = strategy ? { strategy: { stance: strategy.stance, reasons: strategy.reasons } } : {};
 
   try {
     const r = await runDrafter(parts, llm, strategy ?? { stance: baselineStance(parts.checklist), reasons: [] }, verify);
-    await log("drafter", { model: llm.model, claims: r.draft.claims.length, documents: r.draft.documents.length });
+    answeredBy.push(...r.models);
+    await log("drafter", { model: r.models[0], claims: r.draft.claims.length, documents: r.draft.documents.length });
     if (r.repaired) await log("repair", { rejected: r.firstPassRemoved });
+    if (r.repairFailed) await log("llm_fallback", { step: "drafter_repair", error: describe(r.repairFailed), kept: "first draft; the checker removes its rejected claims" });
     return {
       draft: r.draft,
-      ...(strategy ? { strategy: { stance: strategy.stance, reasons: strategy.reasons } } : {}),
+      ...strategyOut,
       authoredBy: {
         drafter: "llm" as const,
         model: llm.model,
+        answeredBy: [...new Set(answeredBy)],
+        inputHash,
         llmCalls: budget.calls.length,
         ...(r.repaired ? { repaired: true } : {}),
         ...(strategy?.capped ? { stanceCapped: true } : {}),
@@ -79,10 +106,10 @@ async function draftWithLlm(parts: CaseParts, deps: AgentDeps, verify: VerifyOpt
     };
   } catch (e) {
     if (!(e instanceof LlmError)) throw e;
-    await log("llm_fallback", { step: budget.calls.at(-1) ?? "drafter", error: describe(e) });
+    await log("llm_fallback", { step: e.purpose ?? "drafter", error: describe(e) });
     return {
       draft: templateDraft(parts),
-      ...(strategy ? { strategy: { stance: strategy.stance, reasons: strategy.reasons } } : {}),
+      ...strategyOut,
       authoredBy: { drafter: "template" as const, llmCalls: budget.calls.length, fallbackReason: describe(e) },
     };
   }

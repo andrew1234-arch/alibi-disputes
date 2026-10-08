@@ -32,7 +32,7 @@ export const DRAFTER_SYSTEM = `${SHARED_RULES}
 
 Your task: draft the merchant's response to PayPal, addressed to the PayPal reviewer.
 - claims: short factual sentences in priority order (most important first). Courteous, specific to this dispute reason, no filler. Together they should answer each evidence type PayPal requested.
-- trackingInfo: carrier and tracking number for each shipment record, only if a record contains them.
+- trackingInfo: carrier and tracking number for each shipment record, only if a record contains them. Use the carrier name as written in the record; set carrierOther to "" (it's only for carriers PayPal doesn't list, as "OTHER").
 - refundIds: refund ids, only if a refund record contains them.
 - documents: ids of records that have "hasDocument": true and support the response (e.g. a proof-of-delivery PDF).
 Leave a list empty when no record supports it.`;
@@ -70,5 +70,8 @@ export function caseInput(parts: CaseParts, extra: Record<string, unknown> = {})
     })),
     ...extra,
   };
-  return `<case>\n${JSON.stringify(data, null, 2)}\n</case>`;
+  // Escape < and > so text inside a record (e.g. a buyer writing "</case>")
+  // can't close the data block. JSON.parse reads \u003c back as "<".
+  const json = JSON.stringify(data, null, 2).replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
+  return `<case>\n${json}\n</case>`;
 }

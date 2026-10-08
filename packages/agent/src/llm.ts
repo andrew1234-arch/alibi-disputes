@@ -16,10 +16,16 @@ export interface LlmRequest<T> {
   schema: z.ZodType<T>;
 }
 
+export interface LlmResult<T> {
+  output: T;
+  /** The model that actually answered (a server-side fallback can differ from the configured one). */
+  model: string;
+}
+
 export interface Llm {
-  /** Model id, recorded on the case for the audit trail. */
+  /** Configured model id. */
   readonly model: string;
-  complete<T>(req: LlmRequest<T>): Promise<T>;
+  complete<T>(req: LlmRequest<T>): Promise<LlmResult<T>>;
 }
 
 export type LlmFailure = "budget" | "refusal" | "truncated" | "invalid_output" | "api";
@@ -29,6 +35,8 @@ export class LlmError extends Error {
   constructor(
     readonly kind: LlmFailure,
     message: string,
+    /** The step that failed (for the activity feed). */
+    readonly purpose?: LlmPurpose,
   ) {
     super(message);
     this.name = "LlmError";
@@ -36,8 +44,9 @@ export class LlmError extends Error {
 }
 
 /**
- * Caps LLM calls per case (ALIBI_MAX_LLM_CALLS_PER_CASE). A call that would go
- * over throws before any request is made.
+ * Caps LLM calls per case build (ALIBI_MAX_LLM_CALLS_PER_CASE). A call that
+ * would go over throws before any request is made. Rebuilds whose input didn't
+ * change reuse the stored draft and make no calls at all (agent/index.ts).
  *
  * Example with max 3: strategist (1), drafter (2), repair (3), a second repair → LlmError("budget").
  */
@@ -48,7 +57,7 @@ export class CallBudget {
   constructor(readonly max: number) {}
 
   take(purpose: LlmPurpose): void {
-    if (this.used >= this.max) throw new LlmError("budget", `LLM call budget of ${this.max} per case used up (next: ${purpose})`);
+    if (this.used >= this.max) throw new LlmError("budget", `LLM call budget of ${this.max} per build used up`, purpose);
     this.used++;
     this.calls.push(purpose);
   }

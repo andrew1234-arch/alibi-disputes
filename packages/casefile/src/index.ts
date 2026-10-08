@@ -67,16 +67,24 @@ export function finishCaseFile(
 ): CaseFile {
   const { facts, records, evidence, checklist } = parts;
   const v = verifyDraft(draft, evidence, checklist, opts.verify);
-  const strategy = opts.strategy ?? { stance: baselineStance(checklist), reasons: [] };
+  const baseline = baselineStance(checklist);
+  const strategy = opts.strategy ?? { stance: baseline, reasons: [] };
   const reasons = verifyDraft({ claims: strategy.reasons, documents: [] }, evidence, [], opts.verify);
+  // A stance that departs from the evidence-based baseline needs at least one
+  // verified reason. If every reason was removed (e.g. a buyer message talked
+  // the model into "concede" on facts that don't exist), use the baseline.
+  const unsupported = strategy.stance !== baseline && reasons.claims.length === 0;
+  const stanceRemoved = unsupported
+    ? [{ text: `Stance "${strategy.stance}"`, reason: `No verified reason supports it; using the evidence-based stance "${baseline}"` }]
+    : [];
   return {
     ...facts,
     timeline: records.map((r) => r.id),
     checklist,
-    strategy: { stance: strategy.stance, reasons: reasons.claims },
+    strategy: unsupported ? { stance: baseline, reasons: [] } : { stance: strategy.stance, reasons: reasons.claims },
     draft: { claims: v.claims, notes: v.notes, ...(v.evidenceInfo ? { evidenceInfo: v.evidenceInfo } : {}), documents: v.documents },
     evidence,
-    removedByVerifier: [...v.removed, ...reasons.removed.map((r) => ({ ...r, reason: `Strategy reason: ${r.reason}` }))],
+    removedByVerifier: [...v.removed, ...reasons.removed.map((r) => ({ ...r, reason: `Strategy reason: ${r.reason}` })), ...stanceRemoved],
     createdAt: opts.now.toISOString(),
   };
 }
