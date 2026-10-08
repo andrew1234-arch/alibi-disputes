@@ -16,7 +16,8 @@
     "test:e2e": "pnpm --filter @alibi/web test",
     "seed:demo": "tsx --env-file-if-exists=.env scripts/seed-demo.ts",
     "reset:demo": "tsx --env-file-if-exists=.env scripts/reset-demo.ts",
-    "case": "tsx --env-file-if-exists=.env scripts/case.ts"
+    "case": "tsx --env-file-if-exists=.env scripts/case.ts",
+    "smoke:llm": "tsx --env-file-if-exists=.env scripts/smoke-llm.ts"
   },
   "devDependencies": {
     "@alibi/core": "workspace:*",
