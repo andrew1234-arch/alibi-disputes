@@ -12,7 +12,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { hasAction, normaliseAction, parseEnv, paypalEnvSchema } from "@alibi/core";
-import { createPaypalReader, PaypalError, type DisputeDetail } from "@alibi/paypal/read";
+import { createPaypalReader, PaypalError, PaypalNotSentError, type DisputeDetail } from "@alibi/paypal/read";
 import { createSandboxHelpers } from "@alibi/paypal/sandbox";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -41,6 +41,8 @@ const record = (name: string, ok: boolean, ...detail: string[]) => {
 };
 
 function describeError(e: unknown): string {
+  // Token failures arrive wrapped; show PayPal's own status and debug id.
+  if (e instanceof PaypalNotSentError && e.paypalError) e = e.paypalError;
   if (e instanceof PaypalError) return `${e.message}${e.debugId ? ` (PayPal-Debug-Id ${e.debugId})` : ""}`;
   return e instanceof Error ? e.message : String(e);
 }
