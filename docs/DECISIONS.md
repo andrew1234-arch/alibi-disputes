@@ -134,11 +134,18 @@ Webhooks record the event id and queue the rebuild in one transaction too, so an
   - **Escaped prompt data.** `<` and `>` in record data are escaped, so a buyer can't close the `<case>` block.
   - **Read the reply in order.** The adapter checks refusal → truncation → JSON → zod itself (the SDK's `parse()` would hide truncation), and records the model that actually answered (`answeredBy`).
   - **Repair failure keeps the first draft.** A failed repair call keeps the first draft, and the checker removes its rejected claims.
-  - **Bounded waits.** The rebuild queue runs up to 4 cases at once, and LLM calls are capped at 60 s × 2 attempts, so one slow case can't stall the others.
+  - **Bounded waits.** The rebuild queue is a pool of 4 workers, so one slow case can't stall the others, and a job's failure can't end the pass early. LLM calls are streamed, with a 5-minute ceiling and one retry.
+- **Reuse keeps its record.** A reused draft keeps the checker's original removals (the evidence guard's record), and `inputHash` also covers the model and prompts, so changing either re-drafts.
 - **Poirot port.** Not started (SPEC §6.2: only after Poirot is submitted). `@alibi/casefile` keeps its in-repo engine behind `CaseEngine`.
 
 ## ADR-030 — Polling fallback (2026-10-08)
-SPEC §5.1 and CLAUDE §1.9 make webhooks primary and polling the fallback. At startup, and every `ALIBI_POLL_MINUTES` (default 10; 0 = off), the web process lists disputes (`GET /v1/customer/disputes`, page size 50, following `rel: "next"` links, up to 20 pages). A dispute is queued only when its `update_time` differs from the last one seen (`poll_state`). Storing the new time and queuing happen in one transaction, through the same `pending_rebuilds` queue as webhooks, so a dispute both polled and webhooked is rebuilt once. Startup polling also catches disputes created while the service was down. VERIFY: the pagination link shape, on a real multi-page sandbox list.
+SPEC §5.1 and CLAUDE §1.9 make webhooks primary and polling the fallback. At startup, and every `ALIBI_POLL_MINUTES` (default 10; 0 = off), the web process lists disputes (`GET /v1/customer/disputes`, page size 50, following `rel: "next"` links, up to 20 pages). A dispute is queued only when its `update_time` differs from the one its stored case was built from (`case.paypalUpdateTime`), through the same `pending_rebuilds` queue as webhooks. *Revised after review (2026-10-08):*
+- **Compare with the built case, not the last poll.** A change a webhook already rebuilt isn't rebuilt again, and a rebuild that failed or was abandoned is retried by the next poll.
+- **Polls don't reset backoff.** A poll doesn't reset the backoff of a row already queued.
+- **Incremental listing.** After the first full poll, only disputes updated since the last *complete* poll are listed (`update_time_after`, with a 1 h overlap).
+- **Seeding rebuilds.** `seed:demo` queues a rebuild for every dispute it links, so cases built before seeding pick up their demo data.
+
+Startup polling also catches disputes created while the service was down. VERIFY: the pagination link shape and the `update_time_after` semantics, on the real sandbox.
 
 ## ADR-031 — "Generic AI reply" comparison backend (2026-10-08)
 SPEC §5.6. `GET /api/cases/[id]/compare` asks the same model, with only the dispute reason and amount (no case file), to write the seller's response. Each sentence is then checked against this case's real evidence: **supported**, **invented** (a fact no record contains, with the verifier's reason) or **vague** (no checkable fact). It also lists the requested evidence types the reply leaves unanswered. The check is generous to the generic reply: each sentence is checked against every record at once. The result is cached per case and input (`comparisons`), so the public demo spends at most one LLM call per case version. Reads are open on the read-only demo and need the operator token in a writable deployment. The UI panel comes with M4.

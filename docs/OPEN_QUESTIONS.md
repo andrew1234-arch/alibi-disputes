@@ -58,5 +58,6 @@ Primary source for "answered (docs)": PayPal's official OpenAPI spec
 
 - Best endpoint to link dispute → capture/transaction (`disputed_transactions[].seller_transaction_id` → Transaction Search or Captures API?).
 - Poirot / Open Agent IP terms allow reuse (SPEC §6.2).
+- `update_time_after` on the dispute list filters on the dispute's `update_time` (the incremental poll relies on it).
 - Dispute list pagination: a `rel: "next"` link whose href carries `next_page_token` (`nextPageToken` in `@alibi/paypal/read`). Confirm with a real multi-page sandbox list.
 - Webhook `paypal-cert-url` is always `https://*.paypal.com/...`. `isPaypalCertUrl` refuses anything else before calling verify-webhook-signature. Check against the first real sandbox delivery; widen the host rule if PayPal uses another domain.
