@@ -1,6 +1,13 @@
-import { SELLER_RESPONSE_STATUS, SELLER_SOURCE, type CaseFile } from "@alibi/core";
+import { baselineStance, SELLER_RESPONSE_STATUS, SELLER_SOURCE, type CaseFile } from "@alibi/core";
 import { approvalHash, type DraftInput, type VerifyOptions } from "@alibi/core/server";
-import { assembleCaseFile, type CaseParts } from "@alibi/casefile";
+import { finishCaseFile, prepareCase, templateDraft, type CaseParts } from "@alibi/casefile";
+import { runDrafter } from "./drafter";
+import { budgeted, CallBudget, LlmError, type Llm } from "./llm";
+import { runStrategist } from "./strategist";
+
+export { createAnthropicLlm, type AnthropicLlmOptions } from "./anthropic";
+export { CallBudget, LlmError, type Llm, type LlmRequest } from "./llm";
+export { capStance } from "./strategist";
 import type { MerchantStore } from "@alibi/merchant";
 import { disputeToEvidence, requestedEvidence, type PaypalReader } from "@alibi/paypal/read";
 
@@ -9,8 +16,13 @@ import { disputeToEvidence, requestedEvidence, type PaypalReader } from "@alibi/
 //   1. fetch     GET /v1/customer/disputes/{id}: details + requested evidence
 //   2. gather    PayPal facts → EvidenceRecords; merchant records for the disputed transaction
 //   3. case file timeline, checklist, baseline stance (casefile + core, pure)
-//   4. draft     template drafter today; M3 adds the LLM strategist + drafter here
-//   5. verify    every claim checked against its cited evidence (core, pure)
+//   4. strategy  LLM strategist: stance + cited reasons; never more aggressive than the baseline
+//   5. draft     LLM drafter → checker → one repair round if the checker removed anything
+//   6. verify    every claim and reason checked against its cited evidence (core, pure)
+//
+// Without an LLM (not configured, budget spent, refusal, API error, invalid
+// JSON) steps 4–5 fall back to the baseline stance and the template drafter,
+// which passes the verifier by construction. The case records which path ran.
 //
 // Each step is reported through `log` so the activity feed can show the agent
 // working, including the exact PayPal call it made.
@@ -21,8 +33,59 @@ export interface AgentDeps {
   now: () => Date;
   timeZone?: string | undefined;
   log?: (step: string, detail?: Record<string, unknown>) => Promise<void> | void;
-  /** Override the drafter (tests; M3's LLM drafter). Defaults to the template drafter. */
+  /** Strategist + drafter model. Omitted → template drafter and baseline stance. */
+  llm?: Llm | undefined;
+  /** ALIBI_MAX_LLM_CALLS_PER_CASE (default 8). */
+  maxLlmCalls?: number;
+  /** Fixed sync drafter (tests). Takes precedence over `llm`. */
   draft?: (parts: CaseParts) => DraftInput;
+}
+
+type Log = (step: string, detail?: Record<string, unknown>) => Promise<void> | void;
+
+/** Steps 4–5. Any LlmError falls back to the template drafter; other errors (bugs) propagate. */
+async function draftWithLlm(parts: CaseParts, deps: AgentDeps, verify: VerifyOptions, log: Log) {
+  if (!deps.llm) {
+    await log("llm_skipped", { reason: "LLM not configured" });
+    return { draft: templateDraft(parts), authoredBy: { drafter: "template" as const, llmCalls: 0, fallbackReason: "LLM not configured" } };
+  }
+  const budget = new CallBudget(deps.maxLlmCalls ?? 8);
+  const llm = budgeted(deps.llm, budget);
+  const describe = (e: LlmError) => `${e.kind}: ${e.message}`;
+
+  let strategy: Awaited<ReturnType<typeof runStrategist>> | undefined;
+  try {
+    strategy = await runStrategist(parts, llm);
+    await log("strategist", { model: llm.model, stance: strategy.stance, reasons: strategy.reasons.length, capped: strategy.capped });
+  } catch (e) {
+    if (!(e instanceof LlmError)) throw e;
+    await log("llm_fallback", { step: "strategist", error: describe(e) });
+  }
+
+  try {
+    const r = await runDrafter(parts, llm, strategy ?? { stance: baselineStance(parts.checklist), reasons: [] }, verify);
+    await log("drafter", { model: llm.model, claims: r.draft.claims.length, documents: r.draft.documents.length });
+    if (r.repaired) await log("repair", { rejected: r.firstPassRemoved });
+    return {
+      draft: r.draft,
+      ...(strategy ? { strategy: { stance: strategy.stance, reasons: strategy.reasons } } : {}),
+      authoredBy: {
+        drafter: "llm" as const,
+        model: llm.model,
+        llmCalls: budget.calls.length,
+        ...(r.repaired ? { repaired: true } : {}),
+        ...(strategy?.capped ? { stanceCapped: true } : {}),
+      },
+    };
+  } catch (e) {
+    if (!(e instanceof LlmError)) throw e;
+    await log("llm_fallback", { step: budget.calls.at(-1) ?? "drafter", error: describe(e) });
+    return {
+      draft: templateDraft(parts),
+      ...(strategy ? { strategy: { stance: strategy.stance, reasons: strategy.reasons } } : {}),
+      authoredBy: { drafter: "template" as const, llmCalls: budget.calls.length, fallbackReason: describe(e) },
+    };
+  }
 }
 
 export async function buildCase(disputeId: string, deps: AgentDeps): Promise<CaseFile> {
@@ -46,7 +109,7 @@ export async function buildCase(disputeId: string, deps: AgentDeps): Promise<Cas
   await log("gather_merchant", { records: merchant.length, source: "merchant_demo" });
 
   const verify: VerifyOptions = deps.timeZone ? { timeZone: deps.timeZone } : {};
-  const cf = assembleCaseFile(
+  const parts = prepareCase(
     {
       disputeId,
       reason: d.reason,
@@ -59,8 +122,15 @@ export async function buildCase(disputeId: string, deps: AgentDeps): Promise<Cas
       requested,
     },
     [...paypal, ...merchant],
-    { now, verify, ...(deps.draft ? { draft: deps.draft } : {}) },
   );
+
+  const authored = deps.draft
+    ? { draft: deps.draft(parts), authoredBy: { drafter: "template" as const, llmCalls: 0, fallbackReason: "fixed drafter" } }
+    : await draftWithLlm(parts, deps, verify, log);
+  const cf = {
+    ...finishCaseFile(parts, authored.draft, { now, verify, ...("strategy" in authored ? { strategy: authored.strategy } : {}) }),
+    authoredBy: authored.authoredBy,
+  };
   await log("case_file", {
     checklist: cf.checklist.map((c) => ({ type: c.evidenceType, satisfied: c.satisfiedBy.length, gap: c.gap })),
     stance: cf.strategy.stance,

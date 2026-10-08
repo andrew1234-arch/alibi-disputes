@@ -13,7 +13,8 @@ describe("buildCase", () => {
   it("runs fetch → gather → case file → draft → verify, logging each step", async () => {
     const steps: string[] = [];
     const cf = await buildCase("PP-D-1", { reader, merchant, now: () => now, log: (s) => void steps.push(s) });
-    expect(steps).toEqual(["fetch", "requested", "gather_paypal", "gather_merchant", "case_file", "verify"]);
+    expect(steps).toEqual(["fetch", "requested", "gather_paypal", "gather_merchant", "llm_skipped", "case_file", "verify"]);
+    expect(cf.authoredBy).toMatchObject({ drafter: "template", llmCalls: 0, fallbackReason: "LLM not configured" });
     expect(cf.strategy.stance).toBe("fight");
     expect(cf.removedByVerifier).toEqual([]);
     const sources = new Set(Object.values(cf.evidence).map((r) => r.source));
