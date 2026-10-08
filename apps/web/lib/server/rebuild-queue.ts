@@ -13,6 +13,7 @@ import type { AppContext } from "./context";
 const BASE_DELAY_MS = 30_000;
 const MAX_DELAY_MS = 60 * 60_000;
 export const POLL_INTERVAL_MS = 30_000;
+const CONCURRENCY = 4;
 
 export const retryDelayMs = (attempts: number) => Math.min(BASE_DELAY_MS * 2 ** attempts, MAX_DELAY_MS);
 /** ~1 day of retries at the 1 h cap; after that a human should look. */
@@ -45,22 +46,12 @@ export function drainRebuilds(ctx: AppContext): Promise<void> {
     try {
       do {
         rerun = false;
-        for (const job of await ctx.repo.dueRebuilds()) {
-          try {
-            await rebuildCase(ctx, job.disputeId);
-            await ctx.repo.rebuildDone(job.disputeId, job.version);
-          } catch (e) {
-            const error = e instanceof Error ? e.message : String(e);
-            const attempt = job.attempts + 1;
-            if (isPermanent(e) || attempt >= MAX_ATTEMPTS) {
-              // Give up on this queueing; a new webhook or a manual build re-queues it.
-              await ctx.repo.rebuildDone(job.disputeId, job.version);
-              await ctx.repo.logActivity(job.disputeId, "build_abandoned", { error, attempt, permanent: isPermanent(e) });
-            } else {
-              await ctx.repo.rebuildFailed(job.disputeId, job.version, error, retryDelayMs(job.attempts));
-              await ctx.repo.logActivity(job.disputeId, "build_failed", { error, attempt });
-            }
-          }
+        // Up to CONCURRENCY cases at a time (each is one dispute, so no two
+        // jobs touch the same case): a slow LLM call on one case doesn't hold
+        // up status updates for the others.
+        const jobs = await ctx.repo.dueRebuilds();
+        for (let i = 0; i < jobs.length; i += CONCURRENCY) {
+          await Promise.all(jobs.slice(i, i + CONCURRENCY).map((job) => runJob(ctx, job)));
         }
       } while (rerun);
     } finally {
@@ -68,6 +59,24 @@ export function drainRebuilds(ctx: AppContext): Promise<void> {
     }
   })();
   return draining;
+}
+
+async function runJob(ctx: AppContext, job: { disputeId: string; version: number; attempts: number }): Promise<void> {
+  try {
+    await rebuildCase(ctx, job.disputeId);
+    await ctx.repo.rebuildDone(job.disputeId, job.version);
+  } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    const attempt = job.attempts + 1;
+    if (isPermanent(e) || attempt >= MAX_ATTEMPTS) {
+      // Give up on this queueing; a new webhook or a manual build re-queues it.
+      await ctx.repo.rebuildDone(job.disputeId, job.version);
+      await ctx.repo.logActivity(job.disputeId, "build_abandoned", { error, attempt, permanent: isPermanent(e) });
+    } else {
+      await ctx.repo.rebuildFailed(job.disputeId, job.version, error, retryDelayMs(job.attempts));
+      await ctx.repo.logActivity(job.disputeId, "build_failed", { error, attempt });
+    }
+  }
 }
 
 /** Picks up rows left by a previous process, then polls for due retries. */

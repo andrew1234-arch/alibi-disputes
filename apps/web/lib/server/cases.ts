@@ -16,6 +16,9 @@ export async function rebuildCase(ctx: AppContext, disputeId: string): Promise<C
     timeZone: ctx.env.ALIBI_MERCHANT_TIME_ZONE,
     llm: ctx.llm,
     maxLlmCalls: ctx.env.ALIBI_MAX_LLM_CALLS_PER_CASE,
+    // Lets an unchanged case reuse its LLM draft instead of re-drafting (and
+    // lapsing the merchant's approval) on every webhook.
+    previous: await ctx.repo.getCase(disputeId),
     log: (step, detail) => ctx.repo.logActivity(disputeId, step, detail ?? {}),
   });
   // buildCase did the network work. Reconciling a stuck send, detecting a new
