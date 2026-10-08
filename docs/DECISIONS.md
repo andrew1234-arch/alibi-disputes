@@ -127,6 +127,14 @@ Webhooks record the event id and queue the rebuild in one transaction too, so an
   - The prompt carries record data only (ids, labels, values, `hasDocument`), never document URLs or credentials. Buyer text is marked as data.
 - **Budget and fallback.** `ALIBI_MAX_LLM_CALLS_PER_CASE` (default 8; a case uses 2–3). Any `LlmError` (budget, refusal, truncation, invalid output, API error) falls back to the template drafter, which passes the verifier by construction. Other errors are bugs and propagate. `case.authoredBy` records which path ran, the model, the call count, whether the draft was repaired, and whether the stance was capped.
 - **Configuration.** `ANTHROPIC_API_KEY` and `ALIBI_MODEL` are optional on the web server but must be set together; without them every case uses the template. The recommended model is `claude-opus-5-5`.
+- **Review fixes (same day):**
+  - **Reuse unchanged drafts.** A rebuild whose LLM input is unchanged (`authoredBy.inputHash`, a hash of the exact prompt data) reuses the stored draft and strategy with no LLM calls. Otherwise every webhook would re-draft, replace the text the merchant approved and lapse the approval.
+  - **No temperature.** Current models reject sampling parameters, so there's no low temperature (CLAUDE §5 asks for one). This is the exception, recorded here: repeatability comes from reuse, and correctness from the checker.
+  - **A stance needs a reason.** A stance that departs from the baseline needs at least one verified reason; otherwise the baseline is used and the removal is shown.
+  - **Escaped prompt data.** `<` and `>` in record data are escaped, so a buyer can't close the `<case>` block.
+  - **Read the reply in order.** The adapter checks refusal → truncation → JSON → zod itself (the SDK's `parse()` would hide truncation), and records the model that actually answered (`answeredBy`).
+  - **Repair failure keeps the first draft.** A failed repair call keeps the first draft, and the checker removes its rejected claims.
+  - **Bounded waits.** The rebuild queue runs up to 4 cases at once, and LLM calls are capped at 60 s × 2 attempts, so one slow case can't stall the others.
 - **Poirot port.** Not started (SPEC §6.2: only after Poirot is submitted). `@alibi/casefile` keeps its in-repo engine behind `CaseEngine`.
 
 ## Hooks proof (2026-10-06)

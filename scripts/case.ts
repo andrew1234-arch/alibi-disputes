@@ -69,7 +69,7 @@ function show({ caseFile: cf, draftHash, approvalValid, payload }: CaseView) {
   if (by) {
     console.log(
       by.drafter === "llm"
-        ? `drafted by ${by.model} (${by.llmCalls} LLM call${by.llmCalls === 1 ? "" : "s"}${by.repaired ? ", revised after the checker rejected claims" : ""}${by.stanceCapped ? ", stance lowered to match the evidence" : ""})`
+        ? `drafted by ${by.answeredBy?.join(" + ") ?? by.model} (${by.reused ? "reused: case unchanged since the last draft" : `${by.llmCalls} LLM call${by.llmCalls === 1 ? "" : "s"}`}${by.repaired ? ", revised after the checker rejected claims" : ""}${by.stanceCapped ? ", stance lowered to match the evidence" : ""})`
         : `drafted by the template drafter (${by.fallbackReason ?? "no LLM"})`,
     );
   }
