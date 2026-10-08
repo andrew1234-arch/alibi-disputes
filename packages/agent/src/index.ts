@@ -3,7 +3,7 @@ import { approvalHash, sha256Hex, type DraftInput, type VerifyOptions } from "@a
 import { finishCaseFile, prepareCase, templateDraft, type CaseParts } from "@alibi/casefile";
 import { runDrafter } from "./drafter";
 import { budgeted, CallBudget, LlmError, type Llm } from "./llm";
-import { caseInput } from "./prompts";
+import { caseInput, DRAFTER_SYSTEM, REPAIR_SYSTEM, STRATEGIST_SYSTEM } from "./prompts";
 import { runStrategist } from "./strategist";
 
 export { createAnthropicLlm, type AnthropicLlmOptions } from "./anthropic";
@@ -58,7 +58,10 @@ async function draftWithLlm(parts: CaseParts, deps: AgentDeps, verify: VerifyOpt
     await log("llm_skipped", { reason: "LLM not configured" });
     return { draft: templateDraft(parts), authoredBy: { drafter: "template" as const, llmCalls: 0, fallbackReason: "LLM not configured" } };
   }
-  const inputHash = sha256Hex(caseInput(parts));
+  // Everything that shapes the LLM's output: the case data, the model and the
+  // prompts. Change any of them (new evidence, ALIBI_MODEL, a prompt fix) and
+  // the case is re-drafted; otherwise the stored draft is reused.
+  const inputHash = sha256Hex(JSON.stringify([caseInput(parts), deps.llm.model, STRATEGIST_SYSTEM, DRAFTER_SYSTEM, REPAIR_SYSTEM]));
   const prev = deps.previous;
   if (prev?.authoredBy?.drafter === "llm" && prev.authoredBy.inputHash === inputHash) {
     // Same input as the stored LLM draft: reuse it. finishCaseFile re-verifies it.
@@ -66,6 +69,9 @@ async function draftWithLlm(parts: CaseParts, deps: AgentDeps, verify: VerifyOpt
     return {
       draft: { claims: prev.draft.claims, ...(prev.draft.evidenceInfo ? { evidenceInfo: prev.draft.evidenceInfo } : {}), documents: prev.draft.documents },
       strategy: prev.strategy,
+      // The stored draft is already clean, so re-verifying it removes nothing.
+      // Carry the original removals forward: they're the evidence guard's record.
+      carriedRemoved: prev.removedByVerifier,
       authoredBy: { ...prev.authoredBy, llmCalls: 0, reused: true },
     };
   }
@@ -155,8 +161,12 @@ export async function buildCase(disputeId: string, deps: AgentDeps): Promise<Cas
   const authored = deps.draft
     ? { draft: deps.draft(parts), authoredBy: { drafter: "template" as const, llmCalls: 0, fallbackReason: "fixed drafter" } }
     : await draftWithLlm(parts, deps, verify, log);
+  const finished = finishCaseFile(parts, authored.draft, { now, verify, ...("strategy" in authored ? { strategy: authored.strategy } : {}) });
+  const carried = ("carriedRemoved" in authored ? authored.carriedRemoved : undefined) ?? [];
   const cf = {
-    ...finishCaseFile(parts, authored.draft, { now, verify, ...("strategy" in authored ? { strategy: authored.strategy } : {}) }),
+    ...finished,
+    removedByVerifier: [...carried, ...finished.removedByVerifier],
+    ...(d.update_time ? { paypalUpdateTime: d.update_time } : {}),
     authoredBy: authored.authoredBy,
   };
   await log("case_file", {

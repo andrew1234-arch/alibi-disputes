@@ -37,12 +37,33 @@ export interface GenericComparison {
   createdAt: string;
 }
 
-/** Splits prose into sentences: on . ! ? followed by whitespace, or on line breaks. */
+// Words that end in "." without ending a sentence ("Oct. 2", "U.S. mail", "Mr. Lee").
+const ABBREVIATIONS = new Set(
+  "jan feb mar apr jun jul aug sep sept oct nov dec mr mrs ms dr st no vs etc inc ltd co approx e.g i.e u.s u.k".split(" "),
+);
+
+/**
+ * Splits prose into sentences on line breaks, and on . ! ? followed by
+ * whitespace and a capital letter or quote, unless the word before the "."
+ * is an abbreviation or a single letter.
+ *
+ * Example: "Paid on Oct. 2, 2026 via U.S. mail. It arrived." → ["Paid on Oct. 2, 2026 via U.S. mail.", "It arrived."]
+ */
 export function sentences(text: string): string[] {
-  return text
-    .split(/(?<=[.!?])\s+|\n+/)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+  const out: string[] = [];
+  for (const line of text.split(/\n+/)) {
+    let start = 0;
+    const re = /[.!?]+(?=\s+["'\u201C(]?[A-Z])/g;
+    for (let m = re.exec(line); m; m = re.exec(line)) {
+      const word = /([A-Za-z.]+)$/.exec(line.slice(start, m.index))?.[1]?.toLowerCase() ?? "";
+      const bare = word.replace(/\.$/, "");
+      if (m[0] === "." && (ABBREVIATIONS.has(bare) || /^[a-z]$/.test(bare) || /^([a-z]\.)+[a-z]$/.test(bare))) continue;
+      out.push(line.slice(start, m.index + m[0].length));
+      start = m.index + m[0].length;
+    }
+    out.push(line.slice(start));
+  }
+  return out.map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
 /**
@@ -54,7 +75,8 @@ export function assessGenericReply(reply: string, cf: Pick<CaseFile, "evidence" 
   const allIds = Object.keys(cf.evidence);
   const out = sentences(reply).map((text) => {
     if (extractFacts(text).length === 0) return { text, verdict: "vague" as const };
-    const v = verifyDraft({ claims: [{ text, evidenceIds: allIds }], documents: [] }, cf.evidence, [], timeZone ? { timeZone } : {});
+    // No notes-length limit here: a long sentence isn't an invented one.
+    const v = verifyDraft({ claims: [{ text, evidenceIds: allIds }], documents: [] }, cf.evidence, [], { notesMax: Number.POSITIVE_INFINITY, ...(timeZone ? { timeZone } : {}) });
     const removed = v.removed[0];
     return removed ? { text, verdict: "invented" as const, reason: removed.reason } : { text, verdict: "supported" as const };
   });

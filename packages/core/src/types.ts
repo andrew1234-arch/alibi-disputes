@@ -81,6 +81,8 @@ export interface CaseFile {
   };
   evidence: Record<string, EvidenceRecord>;
   removedByVerifier: { text: string; reason: string }[];
+  /** PayPal's update_time for the dispute when this case was built (the poller compares against it). */
+  paypalUpdateTime?: string;
   /** Who wrote the draft and strategy, for the audit trail and the UI ("drafted by …"). */
   authoredBy?: {
     drafter: "llm" | "template";

@@ -34,8 +34,10 @@ export interface AnthropicLlmOptions {
 }
 
 export function createAnthropicLlm(opts: AnthropicLlmOptions): Llm {
-  // Bounded so one slow case can't stall the rebuild queue for long: 60 s × 2 attempts.
-  const client = opts.client ?? new Anthropic({ apiKey: opts.apiKey, maxRetries: 1, timeout: 60_000 });
+  // Streamed (below), so a long thinking pass doesn't hit an HTTP idle timeout;
+  // the 5-minute ceiling bounds a stuck request. The rebuild queue runs several
+  // cases at once, so one slow case doesn't hold up the others.
+  const client = opts.client ?? new Anthropic({ apiKey: opts.apiKey, maxRetries: 1, timeout: 300_000 });
   const fallback = DEFAULT_FALLBACK_MODELS.has(opts.model);
 
   return {
@@ -43,7 +45,8 @@ export function createAnthropicLlm(opts: AnthropicLlmOptions): Llm {
     async complete<T>(req: LlmRequest<T>): Promise<LlmResult<T>> {
       let res;
       try {
-        res = await client.beta.messages.create({
+        res = await client.beta.messages
+          .stream({
           model: opts.model,
           max_tokens: opts.maxTokens ?? 16_000,
           system: req.system,
@@ -51,7 +54,8 @@ export function createAnthropicLlm(opts: AnthropicLlmOptions): Llm {
           thinking: { type: "adaptive" },
           output_config: { effort: opts.effort ?? "medium", format: betaZodOutputFormat(req.schema) },
           ...(fallback ? { betas: [FALLBACK_BETA], fallbacks: "default" as const } : {}),
-        });
+          })
+          .finalMessage();
       } catch (e) {
         if (e instanceof Anthropic.APIError) throw new LlmError("api", `Anthropic API ${e.status ?? "error"}: ${e.message}`, req.purpose);
         throw e;

@@ -47,5 +47,10 @@ describe("generic AI reply comparison (SPEC §5.6)", () => {
 
   it("splits sentences on terminal punctuation and line breaks", () => {
     expect(sentences("One. Two!\nThree? Four")).toEqual(["One.", "Two!", "Three?", "Four"]);
+    expect(sentences("The buyer paid 84.00 USD on Oct. 2, 2026 via U.S. mail. It arrived. Mr. Lee signed.")).toEqual([
+      "The buyer paid 84.00 USD on Oct. 2, 2026 via U.S. mail.",
+      "It arrived.",
+      "Mr. Lee signed.",
+    ]);
   });
 });

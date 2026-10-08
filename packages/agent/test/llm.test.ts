@@ -194,6 +194,33 @@ describe("review fixes", () => {
     expect(cf2.authoredBy).toMatchObject({ drafter: "llm", reused: true, llmCalls: 0 });
   });
 
+  it("reuse keeps the checker's record of what it removed", async () => {
+    const id = await ids();
+    const bad = {
+      claims: [
+        { text: "UPS delivered the parcel on Oct 5, 2026.", evidenceIds: [id.delivered] },
+        { text: "The buyer paid $94.00 on Oct 2, 2026.", evidenceIds: [id.tx] },
+      ],
+      trackingInfo: [],
+      refundIds: [],
+      documents: [],
+    };
+    const cf1 = await run(scripted({ strategist: { stance: "fight", reasons: [] }, drafter: bad, drafter_repair: bad }).llm);
+    expect(cf1.removedByVerifier.length).toBeGreaterThan(0);
+    const cf2 = await run(scripted({}).llm, { previous: cf1 });
+    expect(cf2.authoredBy?.reused).toBe(true);
+    expect(cf2.removedByVerifier).toEqual(cf1.removedByVerifier);
+  });
+
+  it("a different model re-drafts instead of reusing", async () => {
+    const id = await ids();
+    const cf1 = await run(scripted(clean(id)).llm);
+    const other = scripted(clean(id));
+    const otherModel = { ...other.llm, model: "another-model" };
+    await run(otherModel, { previous: cf1 });
+    expect(other.seen.length).toBe(2);
+  });
+
   it("changed input (e.g. a new status) re-drafts", async () => {
     const id = await ids();
     const cf1 = await run(scripted(clean(id)).llm);

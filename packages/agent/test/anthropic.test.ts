@@ -16,9 +16,9 @@ function fakeClient(reply: { text?: string } & Record<string, unknown>) {
   const client = {
     beta: {
       messages: {
-        create: async (params: Record<string, unknown>) => {
+        stream: (params: Record<string, unknown>) => {
           calls.push(params);
-          return { model: params.model, content: text === undefined ? [] : [{ type: "text", text }], ...rest };
+          return { finalMessage: async () => ({ model: params.model, content: text === undefined ? [] : [{ type: "text", text }], ...rest }) };
         },
       },
     },
@@ -72,7 +72,7 @@ describe("createAnthropicLlm", () => {
     const { client } = fakeClient({ stop_reason: "end_turn", text: '{"stance":"fight"}', model: "claude-opus-4-8" });
     const r = await createAnthropicLlm({ apiKey: "k", model: "claude-opus-5-5", client }).complete(req);
     expect(r.model).toBe("claude-opus-4-8");
-    const broken = { beta: { messages: { create: async () => Promise.reject(new TypeError("bug")) } } } as unknown as Anthropic;
+    const broken = { beta: { messages: { stream: () => ({ finalMessage: async () => Promise.reject(new TypeError("bug")) }) } } } as unknown as Anthropic;
     await expect(createAnthropicLlm({ apiKey: "k", model: "claude-opus-5-5", client: broken }).complete(req)).rejects.toBeInstanceOf(TypeError);
   });
 });
