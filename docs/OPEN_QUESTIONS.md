@@ -18,7 +18,7 @@ Primary source for "answered (docs)": PayPal's official OpenAPI spec
 | G4a | `notes` max length | answered (docs) | spec `evidence.notes`: minLength 1, maxLength **2000** → `PROVIDE_EVIDENCE_NOTES_MAX` |
 | G4b | File types / size / count limits | answered (docs) | [Supported file types and sizes](https://developer.paypal.com/disputes/supported-file-sizes-types) (verbatim, last updated May 21, 2026): `.jpg`, `.jpeg`, `.gif`, `.png`, `.pdf`; **under 10 MB per file**; **up to 50 MB per API call**. No file-count limit stated. (An earlier summariser read of the guide claimed 20 MB/100 MB/10 files. That was wrong; discard it.) |
 | G4c | `evidence_type` enum | answered (docs) | spec `evidence.evidence_type`: 76 values incl. `PROOF_OF_FULFILLMENT`, `PROOF_OF_REFUND`, `PROOF_OF_DELIVERY_SIGNATURE`, `PROOF_OF_RECEIPT_COPY`, `RETURN_POLICY`, `OTHER` … Spec note: `evidence_info` expected for `PROOF_OF_FULFILLMENT`, `PROOF_OF_REFUND`, `PROOF_OF_RETURN`; documents + notes for the rest |
-| G5 | One `provide-evidence` succeeds; post-submission status captured | open | M2 (kill criterion: by Oct 14) |
+| G5 | One `provide-evidence` succeeds; post-submission status captured | open, **ready to run** | Implemented in `packages/paypal/src/write.ts`, driven through the gate by `pnpm case submit`. Runbook in `docs/DEMO_SCRIPT.md`. Kill criterion: by Oct 14 |
 | G6 | Sandbox settle closes in merchant's favour | answered (docs) | spec: `POST …/adjudicate` `{"adjudication_outcome":"SELLER_FAVOR"}` (sandbox only; needs `UNDER_REVIEW` + `adjudicate` link). Outcome code `RESOLVED_SELLER_FAVOUR` (note British spelling in outcome vs `FAVOR` in request) |
 | G7 | Action link rel names as returned (hyphen vs underscore) | open | Normalised either way (`packages/core/src/actions.ts`); probe records raw rels |
 | G8 | Webhook event names; does sandbox deliver them? | answered (docs), delivery open | `CUSTOMER.DISPUTE.CREATED`, `CUSTOMER.DISPUTE.UPDATED`, `CUSTOMER.DISPUTE.RESOLVED`, verbatim in [Test and go live](https://developer.paypal.com/disputes/test-go-live.md) ("Test webhooks": wait a few minutes after creating the dispute for actions to become available). Sandbox delivery still to observe |
@@ -47,7 +47,15 @@ Primary source for "answered (docs)": PayPal's official OpenAPI spec
 - `tracking_info`: required `carrier_name` (enum, 1257 values. Every value Alibi emits was checked present on 2026-10-06: `UPS`, `USPS`, `FEDEX`, `DHL`, `ROYAL_MAIL`, `CANADA_POST`, `AUSTRALIA_POST`, `DPD`, `GLS`, `ONTRAC`, `NIPOST_NG`, `OTHER`. `carrier_name_other` (max 2000) is mandatory when the carrier is `OTHER`) and `tracking_number`; optional `tracking_url`.
 - `provide-evidence` is only possible when the dispute's HATEOAS links include `provide-evidence` (spec description).
 
+## Stub assumptions to check against the sandbox (`test-stub/src/index.ts`)
+
+- After a successful provide-evidence, status becomes `UNDER_REVIEW` and the evidence appears as `SUBMITTED_BY_SELLER`.
+- In `UNDER_REVIEW`, the links offered are `require-evidence` and `adjudicate` (the docs require both for those sandbox calls).
+- Whether `require-evidence` can move a dispute back to `WAITING_FOR_SELLER_RESPONSE` *after* a submission. `reset:demo` relies on this; otherwise use fresh disputes.
+- The provide-evidence success body is `{ links: [...] }` (spec: `subsequent_action`).
+
 ## Still to answer
 
 - Best endpoint to link dispute → capture/transaction (`disputed_transactions[].seller_transaction_id` → Transaction Search or Captures API?).
 - Poirot / Open Agent IP terms allow reuse (SPEC §6.2).
+- Webhook `paypal-cert-url` is always `https://*.paypal.com/...`. `isPaypalCertUrl` refuses anything else before calling verify-webhook-signature. Check against the first real sandbox delivery; widen the host rule if PayPal uses another domain.
