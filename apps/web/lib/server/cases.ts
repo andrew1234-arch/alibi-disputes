@@ -14,6 +14,8 @@ export async function rebuildCase(ctx: AppContext, disputeId: string): Promise<C
     merchant: await ctx.merchant(),
     now: ctx.now,
     timeZone: ctx.env.ALIBI_MERCHANT_TIME_ZONE,
+    llm: ctx.llm,
+    maxLlmCalls: ctx.env.ALIBI_MAX_LLM_CALLS_PER_CASE,
     log: (step, detail) => ctx.repo.logActivity(disputeId, step, detail ?? {}),
   });
   // buildCase did the network work. Reconciling a stuck send, detecting a new

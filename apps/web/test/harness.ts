@@ -44,7 +44,7 @@ export async function startHarness(stubOpts: StubOptions = {}): Promise<Harness>
   };
   const enqueued: string[] = [];
   const ctx: AppContext & { enqueued: string[] } = {
-    env: { DEMO_READONLY: false, ALIBI_MERCHANT_TIME_ZONE: undefined, ALIBI_OPERATOR_TOKEN: OPERATOR_TOKEN },
+    env: { DEMO_READONLY: false, ALIBI_MERCHANT_TIME_ZONE: undefined, ALIBI_OPERATOR_TOKEN: OPERATOR_TOKEN, ALIBI_MAX_LLM_CALLS_PER_CASE: 8 },
     repo,
     reader: createPaypalReader(env),
     writer: createPaypalWriter(env),

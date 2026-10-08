@@ -1,3 +1,4 @@
+import { createAnthropicLlm, type Llm } from "@alibi/agent";
 import { parseEnv, webEnvSchema, type WebEnv } from "@alibi/core";
 import { DemoStore } from "@alibi/merchant";
 import { createPaypalReader, type PaypalReader } from "@alibi/paypal/read";
@@ -11,7 +12,9 @@ import { drainRebuilds, startRebuildWorker } from "./rebuild-queue";
 // this context is ever serialised to the browser.
 
 export interface AppContext {
-  env: Pick<WebEnv, "DEMO_READONLY" | "ALIBI_MERCHANT_TIME_ZONE" | "ALIBI_OPERATOR_TOKEN">;
+  env: Pick<WebEnv, "DEMO_READONLY" | "ALIBI_MERCHANT_TIME_ZONE" | "ALIBI_OPERATOR_TOKEN" | "ALIBI_MAX_LLM_CALLS_PER_CASE">;
+  /** Strategist + drafter model; undefined → template drafter. Never sees PayPal credentials. */
+  llm?: Llm | undefined;
   repo: Repo;
   reader: Pick<PaypalReader, "getDispute">;
   writer: Pick<PaypalWriter, "provideEvidence">;
@@ -44,6 +47,7 @@ async function init(): Promise<AppContext> {
     repo,
     reader: ctxReader,
     writer: createPaypalWriter(env),
+    llm: env.ANTHROPIC_API_KEY && env.ALIBI_MODEL ? createAnthropicLlm({ apiKey: env.ANTHROPIC_API_KEY, model: env.ALIBI_MODEL }) : undefined,
     verifier: webhookId
       ? createWebhookVerifier({ ...env, PAYPAL_WEBHOOK_ID: webhookId })
       : { verify: async () => ({ verified: false as const, reason: "PAYPAL_WEBHOOK_ID is not configured" }) },
