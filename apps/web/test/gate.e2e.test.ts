@@ -247,6 +247,7 @@ describe("approval gate: write with no response (ambiguous)", () => {
     };
     let reads = 0;
     const flakyReader = {
+      ...h.ctx.reader,
       getDispute: async (id: string) => {
         if (reads++ > 0) throw new PaypalNetworkError("GET dispute", new Error("down"));
         return h.ctx.reader.getDispute(id);
@@ -323,7 +324,7 @@ describe("rebuild queue", () => {
     h.stub.setDispute(makeDispute({ dispute_id: D }));
     await h.repo.setDemoLink("inr-delivered", "TX-UNUSED");
     await h.repo.queueRebuild(D);
-    const down = { ...h.ctx, reader: { getDispute: async () => Promise.reject(new Error("PayPal 503")) } };
+    const down = { ...h.ctx, reader: { ...h.ctx.reader, getDispute: async () => Promise.reject(new Error("PayPal 503")) } };
     await drainRebuilds(down);
     expect(await h.repo.getCase(D)).toBeUndefined();
     const [row] = (await h.sql.query<{ attempts: number; last_error: string }>(`select attempts, last_error from pending_rebuilds`)).rows;
@@ -337,7 +338,7 @@ describe("rebuild queue", () => {
 
   it("a permanent error (PayPal 404) is abandoned instead of retried forever", async () => {
     await h.repo.queueRebuild(D);
-    const gone = { ...h.ctx, reader: { getDispute: async () => Promise.reject(new PaypalError("not found", 404, "dbg", "RESOURCE_NOT_FOUND", undefined)) } };
+    const gone = { ...h.ctx, reader: { ...h.ctx.reader, getDispute: async () => Promise.reject(new PaypalError("not found", 404, "dbg", "RESOURCE_NOT_FOUND", undefined)) } };
     await drainRebuilds(gone);
     expect((await h.sql.query(`select 1 from pending_rebuilds`)).rows).toEqual([]);
     expect((await h.repo.listActivity(D)).map((a) => a.step)).toContain("build_abandoned");
@@ -409,6 +410,7 @@ describe("approval gate: approval lapses during the checks", () => {
     const cf = await approvedCase();
     // While the gate re-fetches the dispute, a merchant edit lands and drops the approval.
     const racingReader = {
+      ...h.ctx.reader,
       getDispute: async (id: string) => {
         const r = await h.ctx.reader.getDispute(id);
         await h.repo.updateCase(D, (prev) => ({ ...prev!, draft: { ...cf.draft, notes: cf.draft.notes + " Edited." } }));

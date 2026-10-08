@@ -5,6 +5,7 @@ import { createPaypalReader, type PaypalReader } from "@alibi/paypal/read";
 import { createWebhookVerifier, type WebhookVerifier } from "@alibi/paypal/webhooks";
 import { createPaypalWriter, type PaypalWriter } from "@alibi/paypal/write";
 import { createRepo, createSql, type Repo } from "@alibi/store";
+import { startPoller } from "./poller";
 import { drainRebuilds, startRebuildWorker } from "./rebuild-queue";
 
 // Composition root for server routes. Built once per process, on first use
@@ -16,7 +17,7 @@ export interface AppContext {
   /** Strategist + drafter model; undefined → template drafter. Never sees PayPal credentials. */
   llm?: Llm | undefined;
   repo: Repo;
-  reader: Pick<PaypalReader, "getDispute">;
+  reader: Pick<PaypalReader, "getDispute" | "listDisputes">;
   writer: Pick<PaypalWriter, "provideEvidence">;
   verifier: Pick<WebhookVerifier, "verify">;
   /** Demo links change when scripts/seed-demo.ts runs, so the store is built per use. */
@@ -59,5 +60,6 @@ async function init(): Promise<AppContext> {
     now: () => new Date(),
   };
   startRebuildWorker(ctx);
+  startPoller(ctx, env.ALIBI_POLL_MINUTES);
   return ctx;
 }

@@ -13,7 +13,7 @@ beforeAll(async () => {
   await repo.migrate(); // idempotent
 }, 180_000);
 beforeEach(async () => {
-  await sql.exec("truncate cases, approvals, submissions, webhook_events, activity, demo_links, pending_rebuilds restart identity");
+  await sql.exec("truncate cases, approvals, submissions, webhook_events, activity, demo_links, pending_rebuilds, poll_state restart identity");
 });
 afterAll(() => sql.close());
 

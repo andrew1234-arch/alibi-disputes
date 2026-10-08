@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PaypalEnv } from "@alibi/core";
-import { createPaypalReader } from "../src/read";
+import { createPaypalReader, nextPageToken } from "../src/read";
 import { PaypalError, PaypalNetworkError, PaypalNotSentError, PaypalResponseShapeError } from "../src/errors";
 
 const env: PaypalEnv = {
@@ -94,5 +94,14 @@ describe("paypal reader", () => {
 
   it("never sends credentials anywhere but the sandbox", () => {
     expect(() => createPaypalReader({ ...env, PAYPAL_API_BASE: "https://api-m.paypal.com" })).toThrow(/Refusing/);
+  });
+});
+
+describe("nextPageToken", () => {
+  it("reads next_page_token from the rel=next link", () => {
+    expect(nextPageToken({ links: [{ rel: "next", href: "https://api-m.sandbox.paypal.com/v1/customer/disputes?page_size=50&next_page_token=ABC" }] })).toBe("ABC");
+    expect(nextPageToken({ links: [{ rel: "self", href: "https://x/y" }] })).toBeUndefined();
+    expect(nextPageToken({})).toBeUndefined();
+    expect(nextPageToken({ links: [{ rel: "next", href: "not a url" }] })).toBeUndefined();
   });
 });

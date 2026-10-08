@@ -137,6 +137,9 @@ Webhooks record the event id and queue the rebuild in one transaction too, so an
   - **Bounded waits.** The rebuild queue runs up to 4 cases at once, and LLM calls are capped at 60 s × 2 attempts, so one slow case can't stall the others.
 - **Poirot port.** Not started (SPEC §6.2: only after Poirot is submitted). `@alibi/casefile` keeps its in-repo engine behind `CaseEngine`.
 
+## ADR-030 — Polling fallback (2026-10-08)
+SPEC §5.1 and CLAUDE §1.9 make webhooks primary and polling the fallback. At startup, and every `ALIBI_POLL_MINUTES` (default 10; 0 = off), the web process lists disputes (`GET /v1/customer/disputes`, page size 50, following `rel: "next"` links, up to 20 pages). A dispute is queued only when its `update_time` differs from the last one seen (`poll_state`). Storing the new time and queuing happen in one transaction, through the same `pending_rebuilds` queue as webhooks, so a dispute both polled and webhooked is rebuilt once. Startup polling also catches disputes created while the service was down. VERIFY: the pagination link shape, on a real multi-page sandbox list.
+
 ## Hooks proof (2026-10-06)
 - **pre-commit** (`pnpm typecheck`): staged `packages/core/src/zz-broken.ts` with `export const broken: number = "nope";` → commit refused, exit 1, `error TS2322: Type 'string' is not assignable to type 'number'`. File removed; nothing was committed.
 - **pre-push** (`pnpm build:all`): on a throwaway branch, added `import "./missing.css";` to `apps/web/app/page.tsx` (passes `tsc`, fails `next build`) and pushed to a scratch bare remote → push refused, exit 1, `Module not found: Can't resolve './missing.css'`. The remote received 0 refs. Branch and remote deleted.

@@ -61,6 +61,13 @@ describe("parseEnv", () => {
     expect(parseEnv(webEnvSchema, { ...web, ANTHROPIC_API_KEY: "k", ALIBI_MODEL: "claude-opus-5-5" }).ALIBI_MODEL).toBe("claude-opus-5-5");
   });
 
+  it("ALIBI_POLL_MINUTES defaults to 10, accepts 0 (off), rejects junk", () => {
+    const web = { ...paypal, DATABASE_URL: "pglite://memory" };
+    expect(parseEnv(webEnvSchema, web).ALIBI_POLL_MINUTES).toBe(10);
+    expect(parseEnv(webEnvSchema, { ...web, ALIBI_POLL_MINUTES: "0" }).ALIBI_POLL_MINUTES).toBe(0);
+    expect(() => parseEnv(webEnvSchema, { ...web, ALIBI_POLL_MINUTES: "-5" })).toThrow(/ALIBI_POLL_MINUTES/);
+  });
+
   it("requires a strong operator token once submissions are on", () => {
     const web = { ...paypal, DATABASE_URL: "pglite://memory", DEMO_READONLY: "false" };
     expect(() => parseEnv(webEnvSchema, web)).toThrow(/ALIBI_OPERATOR_TOKEN: is required when DEMO_READONLY=false/);

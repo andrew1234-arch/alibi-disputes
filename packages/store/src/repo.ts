@@ -286,6 +286,26 @@ export function createRepo(sql: Sql) {
       await queueRebuildIn(sql, disputeId);
     },
 
+    /**
+     * Polling fallback: records a dispute's update_time from a list call. If it
+     * changed (or the dispute is new), queues a rebuild in the same transaction
+     * and returns true. Same update_time → false, nothing queued.
+     */
+    async recordPolledDispute(disputeId: string, updateTime: string): Promise<boolean> {
+      return sql.transaction(async (tx) => {
+        const { rows } = await tx.query<{ dispute_id: string }>(
+          `insert into poll_state (dispute_id, update_time) values ($1, $2)
+           on conflict (dispute_id) do update set update_time = excluded.update_time, polled_at = now()
+           where poll_state.update_time is distinct from excluded.update_time
+           returning dispute_id`,
+          [disputeId, updateTime],
+        );
+        if (rows.length === 0) return false;
+        await queueRebuildIn(tx, disputeId);
+        return true;
+      });
+    },
+
     async dueRebuilds(limit = 10): Promise<{ disputeId: string; version: number; attempts: number }[]> {
       const { rows } = await sql.query<{ dispute_id: string; version: number; attempts: number }>(
         `select dispute_id, version, attempts from pending_rebuilds where next_attempt_at <= now() order by next_attempt_at limit $1`,
@@ -353,6 +373,7 @@ export function createRepo(sql: Sql) {
         await tx.query(`delete from cases where dispute_id = any($1)`, [disputeIds]);
         await tx.query(`delete from activity where dispute_id = any($1)`, [disputeIds]);
         await tx.query(`delete from pending_rebuilds where dispute_id = any($1)`, [disputeIds]);
+        await tx.query(`delete from poll_state where dispute_id = any($1)`, [disputeIds]);
       });
     },
   };

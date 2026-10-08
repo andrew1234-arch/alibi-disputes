@@ -38,3 +38,20 @@ export function createPaypalReader(env: PaypalEnv, opts?: PaypalClientOptions) {
   };
 }
 export type PaypalReader = ReturnType<typeof createPaypalReader>;
+
+/**
+ * The `next_page_token` from a dispute list's `rel: "next"` HATEOAS link, if any.
+ * VERIFY (OPEN_QUESTIONS): sandbox list responses carry pagination as a "next"
+ * link whose href has `next_page_token`; confirm with a real multi-page list.
+ *
+ * Example: { rel: "next", href: "https://…/v1/customer/disputes?page_size=50&next_page_token=ABC" } → "ABC".
+ */
+export function nextPageToken(list: { links?: { rel: string; href: string }[] | undefined }): string | undefined {
+  const href = list.links?.find((l) => l.rel === "next")?.href;
+  if (!href) return undefined;
+  try {
+    return new URL(href).searchParams.get("next_page_token") ?? undefined;
+  } catch {
+    return undefined;
+  }
+}

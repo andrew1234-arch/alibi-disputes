@@ -26,6 +26,21 @@ const positiveInt = (fallback: number) =>
 
 const required = z.string().min(1, "is required");
 
+/** Minutes; 0 turns the feature off. */
+const minutesOrOff = (fallback: number) =>
+  z
+    .string()
+    .optional()
+    .transform((v, ctx) => {
+      if (v === undefined || v === "") return fallback;
+      const n = Number(v);
+      if (!Number.isInteger(n) || n < 0) {
+        ctx.addIssue({ code: "custom", message: "must be a whole number of minutes (0 = off)" });
+        return z.NEVER;
+      }
+      return n;
+    });
+
 export const paypalEnvSchema = z.object({
   PAYPAL_CLIENT_ID: required,
   PAYPAL_CLIENT_SECRET: required,
@@ -90,6 +105,8 @@ export const webEnvSchema = paypalEnvSchema.extend({
   ANTHROPIC_API_KEY: optionalString,
   ALIBI_MODEL: optionalString,
   ALIBI_MAX_LLM_CALLS_PER_CASE: positiveInt(8),
+  // Polling fallback for missed webhooks (SPEC §5.1). Also runs once at startup.
+  ALIBI_POLL_MINUTES: minutesOrOff(10),
 }).superRefine((env, ctx) => {
   requireOperatorWhenWritable(env, ctx);
   llmPair(env, ctx);

@@ -68,6 +68,14 @@ create table if not exists pending_rebuilds (
   last_error       text
 );
 
+-- Polling fallback (SPEC §5.1): the last update_time seen per dispute, so a
+-- poll only queues disputes that changed.
+create table if not exists poll_state (
+  dispute_id   text primary key,
+  update_time  text not null,
+  polled_at    timestamptz not null default now()
+);
+
 create table if not exists activity (
   id          bigserial primary key,
   dispute_id  text,
