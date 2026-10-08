@@ -9,6 +9,7 @@ import { runStrategist } from "./strategist";
 export { createAnthropicLlm, type AnthropicLlmOptions } from "./anthropic";
 export { CallBudget, LlmError, type Llm, type LlmRequest } from "./llm";
 export { capStance } from "./strategist";
+export { assessGenericReply, compareWithGenericReply, genericPrompt, type GenericComparison } from "./generic";
 import type { MerchantStore } from "@alibi/merchant";
 import { disputeToEvidence, requestedEvidence, type PaypalReader } from "@alibi/paypal/read";
 

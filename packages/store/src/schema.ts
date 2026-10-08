@@ -76,6 +76,16 @@ create table if not exists poll_state (
   polled_at    timestamptz not null default now()
 );
 
+-- "Generic AI reply" comparisons (SPEC §5.6), cached per case and input so the
+-- public demo spends at most one LLM call per case, not one per page view.
+create table if not exists comparisons (
+  dispute_id  text not null,
+  key         text not null,
+  payload     jsonb not null,
+  created_at  timestamptz not null default now(),
+  primary key (dispute_id, key)
+);
+
 create table if not exists activity (
   id          bigserial primary key,
   dispute_id  text,

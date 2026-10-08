@@ -5,7 +5,7 @@ import { makeDispute } from "@alibi/test-stub";
 import type { AppContext } from "@/lib/server/context";
 import { rebuildCase } from "@/lib/server/cases";
 import { drainRebuilds } from "@/lib/server/rebuild-queue";
-import { makeApproveRoute, makeBuildRoute, makeCaseRoute, makeDemoDocumentRoute, makeReconcileRoute, makeSubmitRoute } from "@/lib/server/routes";
+import { makeApproveRoute, makeBuildRoute, makeCaseRoute, makeCompareRoute, makeDemoDocumentRoute, makeReconcileRoute, makeSubmitRoute } from "@/lib/server/routes";
 import { buildCase, operatorHeaders, params, resetHarness, startHarness, strongDraft, writes, type Harness } from "./harness";
 
 // SPEC §8.4: the approval gate, end to end, through the real route handlers,
@@ -422,6 +422,31 @@ describe("approval gate: approval lapses during the checks", () => {
     expect(await res.json()).toMatchObject({ code: "APPROVAL_CHANGED" });
     expect(writes(h.stub)).toHaveLength(0);
     expect(await h.repo.listSubmissions(D)).toEqual([]);
+  });
+});
+
+describe("generic AI comparison route", () => {
+  it("409 without an LLM; with one: generated once, then served from cache; open on the read-only demo", async () => {
+    await approvedCase();
+    const get = (ctx: AppContext) => makeCompareRoute(async () => ctx)(new Request("http://x", { headers: operatorHeaders }), params({ id: D }));
+    expect((await get(h.ctx)).status).toBe(409);
+
+    let calls = 0;
+    const llm = {
+      model: "m",
+      complete: async (req: { schema: { parse: (v: unknown) => unknown } }) => {
+        calls++;
+        return { output: req.schema.parse({ reply: "We shipped via FedEx, tracking 7712345678901234." }), model: "m" };
+      },
+    } as unknown as NonNullable<AppContext["llm"]>;
+    const withLlm = { ...h.ctx, llm };
+    const first = await get(withLlm);
+    expect(first.status).toBe(200);
+    expect((await first.json()).sentences[0].verdict).toBe("invented");
+    expect((await get(withLlm)).status).toBe(200);
+    const anon = await makeCompareRoute(async () => ({ ...withLlm, env: { ...withLlm.env, DEMO_READONLY: true } }))(new Request("http://x"), params({ id: D }));
+    expect(anon.status).toBe(200);
+    expect(calls).toBe(1);
   });
 });
 

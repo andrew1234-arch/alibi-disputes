@@ -306,6 +306,17 @@ export function createRepo(sql: Sql) {
       });
     },
 
+    async getComparison<T>(disputeId: string, key: string): Promise<T | undefined> {
+      const { rows } = await sql.query<{ payload: T }>(`select payload from comparisons where dispute_id = $1 and key = $2`, [disputeId, key]);
+      return rows[0]?.payload;
+    },
+
+    /** First writer wins; returns what's stored (so concurrent callers agree). */
+    async saveComparison<T>(disputeId: string, key: string, payload: T): Promise<T> {
+      await sql.query(`insert into comparisons (dispute_id, key, payload) values ($1, $2, $3) on conflict do nothing`, [disputeId, key, JSON.stringify(payload)]);
+      return (await this.getComparison<T>(disputeId, key)) ?? payload;
+    },
+
     async dueRebuilds(limit = 10): Promise<{ disputeId: string; version: number; attempts: number }[]> {
       const { rows } = await sql.query<{ dispute_id: string; version: number; attempts: number }>(
         `select dispute_id, version, attempts from pending_rebuilds where next_attempt_at <= now() order by next_attempt_at limit $1`,
@@ -374,6 +385,7 @@ export function createRepo(sql: Sql) {
         await tx.query(`delete from activity where dispute_id = any($1)`, [disputeIds]);
         await tx.query(`delete from pending_rebuilds where dispute_id = any($1)`, [disputeIds]);
         await tx.query(`delete from poll_state where dispute_id = any($1)`, [disputeIds]);
+        await tx.query(`delete from comparisons where dispute_id = any($1)`, [disputeIds]);
       });
     },
   };

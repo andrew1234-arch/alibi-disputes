@@ -1,4 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
+import { compareWithGenericReply, genericPrompt, LlmError, type GenericComparison } from "@alibi/agent";
+import { canonicalJson, sha256Hex } from "@alibi/core/server";
 import { z } from "zod";
 import { approveDraft } from "./approve";
 import { caseView, rebuildCase } from "./cases";
@@ -178,5 +180,34 @@ export function makeReconcileRoute(getContext: GetContext) {
       if (!done) return json(409, { code: "NOTHING_PENDING", message: "There's no unconfirmed submission for this dispute." });
       await ctx.repo.logActivity(id, "submission_reconciled", { by: "operator", outcome: parsed.data.outcome, paypalStatus: status });
       return json(200, { reconciled: parsed.data.outcome, paypalStatus: status });
+    });
+}
+
+/**
+ * GET: the "Generic AI (no case file)" comparison for a case (SPEC §5.6).
+ * Cached per case + input (reason, amount, model, evidence), so it costs at
+ * most one LLM call per case version. Open on the read-only demo like other
+ * reads; operator-only in a writable deployment.
+ */
+export function makeCompareRoute(getContext: GetContext) {
+  return (req: Request, { params }: Params<{ id: string }>) =>
+    guarded(async () => {
+      const ctx = await getContext();
+      const denied = operatorDenied(req, ctx.env);
+      if (denied) return denied;
+      const { id } = await params;
+      const cf = await ctx.repo.getCase(id);
+      if (!cf) return json(404, { code: "CASE_NOT_FOUND", message: "No case file for this dispute yet." });
+      if (!ctx.llm) return json(409, { code: "LLM_NOT_CONFIGURED", message: "The comparison needs the Claude model (ANTHROPIC_API_KEY + ALIBI_MODEL)." });
+      const key = sha256Hex(canonicalJson({ prompt: genericPrompt(cf), model: ctx.llm.model, evidence: Object.keys(cf.evidence).sort() }));
+      const cached = await ctx.repo.getComparison<GenericComparison>(id, key);
+      if (cached) return json(200, cached);
+      try {
+        const fresh = await compareWithGenericReply(cf, ctx.llm, ctx.now(), ctx.env.ALIBI_MERCHANT_TIME_ZONE);
+        return json(200, await ctx.repo.saveComparison(id, key, fresh));
+      } catch (e) {
+        if (!(e instanceof LlmError)) throw e;
+        return json(502, { code: "LLM_FAILED", message: `The generic reply couldn't be generated (${e.kind}). Try again later.` });
+      }
     });
 }

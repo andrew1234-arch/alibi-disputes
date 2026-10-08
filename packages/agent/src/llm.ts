@@ -6,7 +6,7 @@ import type { z } from "zod";
 // the write adapter: it returns JSON, and that JSON is validated (zod) and then
 // verified against the evidence before anyone sees it.
 
-export type LlmPurpose = "strategist" | "drafter" | "drafter_repair";
+export type LlmPurpose = "strategist" | "drafter" | "drafter_repair" | "generic_reply";
 
 export interface LlmRequest<T> {
   purpose: LlmPurpose;
