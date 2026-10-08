@@ -211,3 +211,13 @@ export function makeCompareRoute(getContext: GetContext) {
       }
     });
 }
+
+/** Render health check: 200 once the app context (env, database, migrations) is up. No secrets, no PayPal call. */
+export function makeHealthRoute(getContext: GetContext) {
+  return () =>
+    guarded(async () => {
+      const ctx = await getContext();
+      await ctx.repo.listDemoLinks();
+      return json(200, { ok: true, readonly: ctx.env.DEMO_READONLY, llm: Boolean(ctx.llm) });
+    });
+}

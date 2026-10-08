@@ -1,0 +1,52 @@
+# Render Blueprint for the public Alibi demo (docs/DEPLOY.md).
+# Field names from https://render.com/docs/blueprint-spec (checked 2026-10-08);
+# run `render blueprint validate` before the first sync.
+#
+# Paid plans on purpose (CLAUDE §5): a free web service sleeps, and a cold
+# start can outlast PayPal's webhook timeout; the demo must stay up through
+# judging (Dec 15).
+
+databases:
+  - name: alibi-db
+    plan: 0.1c-256mb
+    databaseName: alibi
+    user: alibi
+
+services:
+  - type: web
+    name: alibi
+    runtime: node
+    plan: 0.5c-512mb
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @alibi/web build
+    startCommand: pnpm --filter @alibi/web start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: alibi-db
+          property: connectionString
+      # Public demo: submissions, approvals and rebuilds are off (CLAUDE §1.10).
+      - key: DEMO_READONLY
+        value: "true"
+      - key: PAYPAL_API_BASE
+        value: https://api-m.sandbox.paypal.com
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      # Exists only after the deployed URL is registered as a PayPal webhook (docs/DEPLOY.md step 4).
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ALIBI_MODEL
+        value: claude-opus-5-5
+      - key: ALIBI_MERCHANT_TIME_ZONE
+        value: America/Chicago
+      - key: ALIBI_POLL_MINUTES
+        value: "10"
+      # Only used if DEMO_READONLY is ever set to false; generated, never committed.
+      - key: ALIBI_OPERATOR_TOKEN
+        generateValue: true

@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeDispute } from "@alibi/test-stub";
 import { pollDisputes } from "@/lib/server/poller";
+import { makeHealthRoute } from "@/lib/server/routes";
 import { resetHarness, startHarness, type Harness } from "./harness";
 
 // SPEC §5.1 polling fallback, against the PayPal stub and a real schema.
@@ -48,5 +49,13 @@ describe("polling fallback", () => {
     const r = await pollDisputes({ ...h.ctx, reader });
     expect(seen).toEqual([undefined, "TOKEN2"]);
     expect(r).toMatchObject({ listed: 2, queued: ["P1", "P2"] });
+  });
+});
+
+describe("health route", () => {
+  it("200 with no secrets once the context is up", async () => {
+    const res = await makeHealthRoute(async () => h.ctx)();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, readonly: false, llm: false });
   });
 });
