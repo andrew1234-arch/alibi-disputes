@@ -61,7 +61,14 @@ export const disputedTransactionSchema = z.looseObject({
   custom: z.string().optional(),
 });
 
+export const messageSchema = z.looseObject({
+  posted_by: z.string().optional(), // BUYER | SELLER (spec message.posted_by)
+  time_posted: z.string().optional(),
+  content: z.string().optional(),
+});
+
 export const disputeDetailSchema = disputeSummarySchema.extend({
+  messages: z.array(messageSchema).optional(),
   reason: z.string(),
   disputed_transactions: z.array(disputedTransactionSchema).optional(),
   evidences: z.array(evidenceSchema).optional(),

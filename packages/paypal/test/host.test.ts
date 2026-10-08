@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveBaseUrl, SANDBOX_BASE } from "../src/host.js";
+import { resolveBaseUrl, SANDBOX_BASE } from "../src/host";
 
 describe("resolveBaseUrl", () => {
   it("accepts the sandbox, with or without trailing slash", () => {

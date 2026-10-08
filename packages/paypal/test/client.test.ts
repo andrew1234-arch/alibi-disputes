@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PaypalEnv } from "@alibi/core";
-import { createPaypalReader } from "../src/read.js";
-import { PaypalError, PaypalResponseShapeError } from "../src/errors.js";
+import { createPaypalReader } from "../src/read";
+import { PaypalError, PaypalNetworkError, PaypalNotSentError, PaypalResponseShapeError } from "../src/errors";
 
 const env: PaypalEnv = {
   PAYPAL_CLIENT_ID: "id",
@@ -36,6 +36,41 @@ describe("paypal reader", () => {
     const r = createPaypalReader(env, { fetch, sleep: async () => {} });
     await r.listDisputes();
     expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("retries a GET that got no response, then gives up with a network error", async () => {
+    const fetch = vi.fn<(u: string, i?: RequestInit) => Promise<Response>>()
+      .mockResolvedValueOnce(token())
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(json(200, { items: [] }));
+    await createPaypalReader(env, { fetch, sleep: async () => {} }).listDisputes();
+    expect(fetch).toHaveBeenCalledTimes(3);
+
+    const down = vi.fn<(u: string, i?: RequestInit) => Promise<Response>>()
+      .mockResolvedValueOnce(token())
+      .mockRejectedValue(new TypeError("fetch failed"));
+    await expect(createPaypalReader(env, { fetch: down, sleep: async () => {} }).listDisputes()).rejects.toBeInstanceOf(PaypalNetworkError);
+    expect(down).toHaveBeenCalledTimes(4); // token + 3 attempts
+  });
+
+  it("retries a GET whose token request got no response", async () => {
+    const fetch = vi.fn<(u: string, i?: RequestInit) => Promise<Response>>()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValueOnce(token())
+      .mockResolvedValueOnce(json(200, { items: [] }));
+    const r = createPaypalReader(env, { fetch, sleep: async () => {} });
+    await r.listDisputes();
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("doesn't retry a permanent token error; keeps PayPal's status and debug id", async () => {
+    const fetch = vi.fn<(u: string, i?: RequestInit) => Promise<Response>>()
+      .mockResolvedValue(json(401, { error: "invalid_client" }, { "paypal-debug-id": "dbg-401" }));
+    const r = createPaypalReader(env, { fetch, sleep: async () => {} });
+    const err = await r.listDisputes().catch((e: unknown) => e);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(err).toBeInstanceOf(PaypalNotSentError);
+    expect((err as PaypalNotSentError).paypalError).toMatchObject({ status: 401, debugId: "dbg-401" });
   });
 
   it("surfaces PayPal errors with debug id", async () => {

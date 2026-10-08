@@ -1,8 +1,8 @@
 import { z } from "zod";
 import type { PaypalEnv } from "@alibi/core";
 import { REQUIRE_EVIDENCE_ACTIONS, ADJUDICATION_OUTCOMES } from "@alibi/core";
-import { PaypalClient, type PaypalClientOptions } from "./client.js";
-import { SANDBOX_BASE } from "./host.js";
+import { PaypalClient, type PaypalClientOptions } from "./client";
+import { SANDBOX_BASE } from "./host";
 
 // Sandbox-only test helpers (SPEC §6.1). Imported by scripts/ only — never by the
 // app. Both endpoints are documented as sandbox-only by PayPal; we additionally

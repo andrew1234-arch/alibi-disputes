@@ -1,13 +1,14 @@
 import type { PaypalEnv } from "@alibi/core";
-import { PaypalClient, type PaypalClientOptions } from "./client.js";
-import { disputeDetailSchema, disputeListSchema } from "./schemas.js";
+import { PaypalClient, type PaypalClientOptions } from "./client";
+import { disputeDetailSchema, disputeListSchema } from "./schemas";
 
 // Read-only PayPal surface (@alibi/paypal/read). Safe for @alibi/agent to import:
 // nothing here changes dispute state.
 
-export { PaypalError, PaypalResponseShapeError } from "./errors.js";
-export { SANDBOX_BASE } from "./host.js";
-export type { DisputeDetail, DisputeSummary } from "./schemas.js";
+export { PaypalError, PaypalNetworkError, PaypalNotSentError, PaypalResponseShapeError } from "./errors";
+export { SANDBOX_BASE } from "./host";
+export { disputeDetailSchema, type DisputeDetail, type DisputeSummary } from "./schemas";
+export { disputeToEvidence, requestedEvidence } from "./to-evidence";
 
 export interface ListDisputesParams {
   /** Comma-separated states, e.g. "REQUIRED_ACTION". */

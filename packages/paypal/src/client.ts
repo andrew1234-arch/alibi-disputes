@@ -1,8 +1,8 @@
 import type { z } from "zod";
 import type { PaypalEnv } from "@alibi/core";
-import { PaypalError, PaypalResponseShapeError } from "./errors.js";
-import { resolveBaseUrl } from "./host.js";
-import { tokenResponseSchema } from "./schemas.js";
+import { PaypalError, PaypalNetworkError, PaypalNotSentError, PaypalResponseShapeError } from "./errors";
+import { resolveBaseUrl } from "./host";
+import { tokenResponseSchema } from "./schemas";
 
 // Low-level HTTP client shared by read/write/sandbox surfaces. Not exported from
 // any package entry point: consumers get only the surface they are allowed.
@@ -80,24 +80,89 @@ export class PaypalClient {
 
   /** JSON request validated against `schema`. GETs retry on 429/5xx; writes never retry. */
   async request<S extends z.ZodType>(spec: RequestSpec<S>): Promise<{ data: z.infer<S>; raw: RawResult }> {
-    const endpoint = `${spec.method} ${spec.path}`;
     const url = new URL(spec.path, this.baseUrl);
     for (const [k, v] of Object.entries(spec.query ?? {})) if (v !== undefined) url.searchParams.set(k, String(v));
+    return this.send(`${spec.method} ${spec.path}`, url.toString(), spec.method, spec.schema, spec.headers, () =>
+      spec.json !== undefined ? { body: JSON.stringify(spec.json), contentType: "application/json" } : undefined,
+    );
+  }
 
-    const attempts = spec.method === "GET" ? MAX_GET_ATTEMPTS : 1;
+  /**
+   * POST with a pre-serialised body (e.g. multipart FormData, or JSON that must
+   * embed a raw payload byte-for-byte). Never retried.
+   */
+  async post<S extends z.ZodType>(
+    path: string,
+    body: FormData | string,
+    schema: S,
+    contentType?: string,
+  ): Promise<{ data: z.infer<S>; raw: RawResult }> {
+    // FormData: fetch sets multipart/form-data with the boundary itself.
+    return this.send(`POST ${path}`, new URL(path, this.baseUrl).toString(), "POST", schema, undefined, () => ({
+      body,
+      ...(contentType ? { contentType } : {}),
+    }));
+  }
+
+  private async send<S extends z.ZodType>(
+    endpoint: string,
+    url: string,
+    method: "GET" | "POST",
+    schema: S,
+    headers: Record<string, string> | undefined,
+    makeBody: () => { body: FormData | string; contentType?: string } | undefined,
+  ): Promise<{ data: z.infer<S>; raw: RawResult }> {
+    const attempts = method === "GET" ? MAX_GET_ATTEMPTS : 1;
     for (let attempt = 1; ; attempt++) {
-      const { accessToken } = await this.getToken();
-      const res = await this.fetchImpl(url.toString(), {
-        method: spec.method,
-        headers: {
-          ...spec.headers,
-          Authorization: `Bearer ${accessToken}`,
-          Accept: "application/json",
-          ...(spec.json !== undefined ? { "Content-Type": "application/json" } : {}),
-        },
-        ...(spec.json !== undefined ? { body: JSON.stringify(spec.json) } : {}),
-      });
-      const body = await readBody(res);
+      let accessToken: string;
+      try {
+        ({ accessToken } = await this.getToken());
+      } catch (e) {
+        // Token fetch failed before anything was sent, so retrying is safe for a
+        // GET. For a write we never reached PayPal, so it isn't ambiguous: say so,
+        // with a type the approval gate can't mistake for a write outcome.
+        // A 4xx from the token endpoint (e.g. 401 invalid_client) is permanent.
+        const permanent = e instanceof PaypalError && e.status >= 400 && e.status < 500 && e.status !== 429;
+        if (attempt < attempts && !permanent) {
+          await this.sleep(250 * 2 ** (attempt - 1));
+          continue;
+        }
+        throw new PaypalNotSentError(endpoint, e);
+      }
+      const b = makeBody();
+      let res: Response;
+      try {
+        res = await this.fetchImpl(url, {
+          method,
+          headers: {
+            ...headers,
+            Authorization: `Bearer ${accessToken}`,
+            Accept: "application/json",
+            ...(b?.contentType ? { "Content-Type": b.contentType } : {}),
+          },
+        ...(b ? { body: b.body } : {}),
+        });
+      } catch (e) {
+        // No response at all (reset socket, DNS, timeout). Safe to retry a GET;
+        // for a write it's ambiguous whether PayPal received it, so surface it.
+        if (attempt < attempts) {
+          await this.sleep(250 * 2 ** (attempt - 1));
+          continue;
+        }
+        throw new PaypalNetworkError(endpoint, e);
+      }
+      let body: unknown;
+      try {
+        body = await readBody(res);
+      } catch (e) {
+        // Headers arrived, then the connection dropped mid-body. For a write,
+        // PayPal has the request: as ambiguous as no response at all.
+        if (attempt < attempts) {
+          await this.sleep(250 * 2 ** (attempt - 1));
+          continue;
+        }
+        throw new PaypalNetworkError(endpoint, e);
+      }
       if (!res.ok) {
         if (attempt < attempts && RETRY_STATUSES.has(res.status)) {
           await this.sleep(250 * 2 ** (attempt - 1));
@@ -106,7 +171,7 @@ export class PaypalClient {
         throw toPaypalError(endpoint, res, body);
       }
       const raw = { status: res.status, debugId: res.headers.get("paypal-debug-id") ?? undefined, body };
-      return { data: parseOrThrow(endpoint, spec.schema, body), raw };
+      return { data: parseOrThrow(endpoint, schema, body), raw };
     }
   }
 }
