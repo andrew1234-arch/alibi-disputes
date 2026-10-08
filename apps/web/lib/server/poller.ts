@@ -5,31 +5,44 @@ import type { AppContext } from "./context";
 // but a missed webhook, a sandbox that doesn't deliver them, or downtime must
 // not leave a dispute stale. Every ALIBI_POLL_MINUTES (and once at startup)
 // list the merchant's disputes and queue a rebuild for any whose update_time
-// changed since the last poll. Queueing goes through the same durable
-// pending_rebuilds table as webhooks, so a dispute both polled and webhooked
-// is rebuilt once.
+// differs from the one its stored case was built from. Webhook rebuilds update
+// that too, so a change a webhook already handled isn't rebuilt twice.
 //
-// Example: dispute D last seen with update_time T1. A webhook was missed;
-// PayPal now lists D with T2 → recordPolledDispute returns true → D queued.
-// The next poll still sees T2 → nothing queued.
+// After the first full poll, only disputes updated since the last successful
+// poll are listed (update_time_after, with an overlap margin).
+//
+// Example: case D built from update_time T1. A webhook was missed; PayPal now
+// lists D with T2 → queued. Once rebuilt (case now at T2), polls skip D.
 
 const PAGE_SIZE = 50; // PayPal's maximum (docs/OPEN_QUESTIONS.md, list params)
 const MAX_PAGES = 20; // 1,000 disputes per poll is far beyond a demo merchant
+const LAST_POLL_KEY = "poll.last_started_at";
+/** Overlap with the previous poll, so clock skew or a slow update never slips through the gap. */
+const OVERLAP_MS = 60 * 60_000;
 
 export async function pollDisputes(ctx: AppContext): Promise<{ listed: number; queued: string[] }> {
+  const startedAt = ctx.now();
+  const last = await ctx.repo.getState(LAST_POLL_KEY);
+  // VERIFY (OPEN_QUESTIONS): update_time_after filters on the dispute's update_time.
+  const since = last ? new Date(new Date(last).getTime() - OVERLAP_MS).toISOString() : undefined;
   const queued: string[] = [];
   let listed = 0;
   let token: string | undefined;
   for (let page = 0; page < MAX_PAGES; page++) {
-    const { data } = await ctx.reader.listDisputes({ page_size: PAGE_SIZE, ...(token ? { next_page_token: token } : {}) });
+    const { data } = await ctx.reader.listDisputes({
+      page_size: PAGE_SIZE,
+      ...(since ? { update_time_after: since } : {}),
+      ...(token ? { next_page_token: token } : {}),
+    });
     for (const d of data.items) {
       listed++;
-      // No update_time: fall back to the status, so at least status changes are seen.
-      if (await ctx.repo.recordPolledDispute(d.dispute_id, d.update_time ?? `status:${d.status}`)) queued.push(d.dispute_id);
+      if (await ctx.repo.pollNeedsRebuild(d.dispute_id, d.update_time, d.status)) queued.push(d.dispute_id);
     }
     token = nextPageToken(data);
     if (!token) break;
   }
+  // Only a poll that got through every page moves the window forward.
+  if (!token) await ctx.repo.setState(LAST_POLL_KEY, startedAt.toISOString());
   if (queued.length) {
     await ctx.repo.logActivity(null, "poll", { call: "GET /v1/customer/disputes", listed, queued }).catch(() => {});
     for (const id of queued) ctx.onQueued(id);

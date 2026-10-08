@@ -28,11 +28,18 @@ export interface SubmissionRow {
 const iso = (v: unknown) => (v instanceof Date ? v.toISOString() : String(v));
 const isoOrNull = (v: unknown) => (v == null ? null : iso(v));
 
-async function queueRebuildIn(q: Pick<Sql, "query">, disputeId: string): Promise<void> {
+/**
+ * Queue a rebuild. A webhook (resetBackoff, the default) means fresh news, so
+ * an existing row is bumped to run now. A poll doesn't reset a row that's
+ * already waiting out its backoff.
+ */
+async function queueRebuildIn(q: Pick<Sql, "query">, disputeId: string, opts: { resetBackoff?: boolean } = {}): Promise<void> {
   await q.query(
-    `insert into pending_rebuilds (dispute_id) values ($1)
-     on conflict (dispute_id) do update set queued_at = now(), version = pending_rebuilds.version + 1,
-       attempts = 0, next_attempt_at = now(), last_error = null`,
+    opts.resetBackoff === false
+      ? `insert into pending_rebuilds (dispute_id) values ($1) on conflict (dispute_id) do nothing`
+      : `insert into pending_rebuilds (dispute_id) values ($1)
+         on conflict (dispute_id) do update set queued_at = now(), version = pending_rebuilds.version + 1,
+           attempts = 0, next_attempt_at = now(), last_error = null`,
     [disputeId],
   );
 }
@@ -287,23 +294,34 @@ export function createRepo(sql: Sql) {
     },
 
     /**
-     * Polling fallback: records a dispute's update_time from a list call. If it
-     * changed (or the dispute is new), queues a rebuild in the same transaction
-     * and returns true. Same update_time → false, nothing queued.
+     * Polling fallback: queue a rebuild if PayPal's update_time for the dispute
+     * differs from the one the stored case was built from (or there's no case).
+     * Comparing against the *built* case, not the last poll, means:
+     *   - a change a webhook already rebuilt isn't rebuilt again;
+     *   - a rebuild that failed or was abandoned is retried by the next poll.
+     * An already-queued rebuild keeps its own backoff (no reset).
+     * `fallbackKey` stands in when PayPal omits update_time (e.g. "status:OPEN").
      */
-    async recordPolledDispute(disputeId: string, updateTime: string): Promise<boolean> {
+    async pollNeedsRebuild(disputeId: string, updateTime: string | undefined, status: string): Promise<boolean> {
       return sql.transaction(async (tx) => {
-        const { rows } = await tx.query<{ dispute_id: string }>(
-          `insert into poll_state (dispute_id, update_time) values ($1, $2)
-           on conflict (dispute_id) do update set update_time = excluded.update_time, polled_at = now()
-           where poll_state.update_time is distinct from excluded.update_time
-           returning dispute_id`,
-          [disputeId, updateTime],
+        const { rows } = await tx.query<{ t: string | null; s: string }>(
+          `select case_file->>'paypalUpdateTime' as t, paypal_status as s from cases where dispute_id = $1`,
+          [disputeId],
         );
-        if (rows.length === 0) return false;
-        await queueRebuildIn(tx, disputeId);
+        const built = rows[0];
+        if (built && (updateTime ? built.t === updateTime : built.s === status)) return false;
+        await queueRebuildIn(tx, disputeId, { resetBackoff: false });
         return true;
       });
+    },
+
+    async getState(key: string): Promise<string | undefined> {
+      const { rows } = await sql.query<{ value: string }>(`select value from app_state where key = $1`, [key]);
+      return rows[0]?.value;
+    },
+
+    async setState(key: string, value: string): Promise<void> {
+      await sql.query(`insert into app_state (key, value) values ($1, $2) on conflict (key) do update set value = excluded.value`, [key, value]);
     },
 
     async getComparison<T>(disputeId: string, key: string): Promise<T | undefined> {
@@ -311,10 +329,15 @@ export function createRepo(sql: Sql) {
       return rows[0]?.payload;
     },
 
-    /** First writer wins; returns what's stored (so concurrent callers agree). */
+    /** First writer wins; returns what's stored, so concurrent callers agree. */
     async saveComparison<T>(disputeId: string, key: string, payload: T): Promise<T> {
-      await sql.query(`insert into comparisons (dispute_id, key, payload) values ($1, $2, $3) on conflict do nothing`, [disputeId, key, JSON.stringify(payload)]);
-      return (await this.getComparison<T>(disputeId, key)) ?? payload;
+      const { rows } = await sql.query<{ payload: T }>(
+        `insert into comparisons (dispute_id, key, payload) values ($1, $2, $3)
+         on conflict (dispute_id, key) do update set dispute_id = comparisons.dispute_id
+         returning payload`,
+        [disputeId, key, JSON.stringify(payload)],
+      );
+      return rows[0]?.payload ?? payload;
     },
 
     async dueRebuilds(limit = 10): Promise<{ disputeId: string; version: number; attempts: number }[]> {
@@ -384,7 +407,7 @@ export function createRepo(sql: Sql) {
         await tx.query(`delete from cases where dispute_id = any($1)`, [disputeIds]);
         await tx.query(`delete from activity where dispute_id = any($1)`, [disputeIds]);
         await tx.query(`delete from pending_rebuilds where dispute_id = any($1)`, [disputeIds]);
-        await tx.query(`delete from poll_state where dispute_id = any($1)`, [disputeIds]);
+
         await tx.query(`delete from comparisons where dispute_id = any($1)`, [disputeIds]);
       });
     },

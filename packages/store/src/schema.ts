@@ -68,12 +68,10 @@ create table if not exists pending_rebuilds (
   last_error       text
 );
 
--- Polling fallback (SPEC §5.1): the last update_time seen per dispute, so a
--- poll only queues disputes that changed.
-create table if not exists poll_state (
-  dispute_id   text primary key,
-  update_time  text not null,
-  polled_at    timestamptz not null default now()
+-- Small key/value state, e.g. when the last successful dispute poll started.
+create table if not exists app_state (
+  key    text primary key,
+  value  text not null
 );
 
 -- "Generic AI reply" comparisons (SPEC §5.6), cached per case and input so the

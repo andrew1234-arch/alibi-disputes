@@ -199,7 +199,17 @@ export function makeCompareRoute(getContext: GetContext) {
       const cf = await ctx.repo.getCase(id);
       if (!cf) return json(404, { code: "CASE_NOT_FOUND", message: "No case file for this dispute yet." });
       if (!ctx.llm) return json(409, { code: "LLM_NOT_CONFIGURED", message: "The comparison needs the Claude model (ANTHROPIC_API_KEY + ALIBI_MODEL)." });
-      const key = sha256Hex(canonicalJson({ prompt: genericPrompt(cf), model: ctx.llm.model, evidence: Object.keys(cf.evidence).sort() }));
+      // Everything the result depends on: the prompt and model (the reply), the
+      // evidence and time zone (the verdicts), the checklist (what's unanswered).
+      const key = sha256Hex(
+        canonicalJson({
+          prompt: genericPrompt(cf),
+          model: ctx.llm.model,
+          evidence: Object.keys(cf.evidence).sort(),
+          requested: cf.checklist.map((c) => c.evidenceType),
+          timeZone: ctx.env.ALIBI_MERCHANT_TIME_ZONE ?? null,
+        }),
+      );
       const cached = await ctx.repo.getComparison<GenericComparison>(id, key);
       if (cached) return json(200, cached);
       try {

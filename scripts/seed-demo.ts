@@ -50,6 +50,9 @@ async function link(scenarioId: string, disputeId: string) {
     );
   }
   await repo.setDemoLink(s.id, tx.seller_transaction_id);
+  // The case may already have been built without merchant records (e.g. by the
+  // startup poll); queue a rebuild so it picks up the newly linked demo data.
+  await repo.queueRebuild(disputeId);
   console.log(`✔ ${s.id} → transaction ${tx.seller_transaction_id} (dispute ${disputeId}, ${d.status})`);
   warnTiming(s.id, tx.create_time, d);
 }

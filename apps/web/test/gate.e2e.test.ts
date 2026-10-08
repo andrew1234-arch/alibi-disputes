@@ -336,6 +336,30 @@ describe("rebuild queue", () => {
     expect((await h.sql.query(`select 1 from pending_rebuilds`)).rows).toEqual([]);
   });
 
+  it("a bookkeeping failure on one job doesn't end the pass early or rebuild others twice", async () => {
+    for (const id of ["Q-1", "Q-2", "Q-3"]) {
+      h.stub.setDispute(makeDispute({ dispute_id: id }));
+      await h.repo.queueRebuild(id);
+    }
+    let builds = 0;
+    const counting = {
+      ...h.ctx,
+      reader: {
+        ...h.ctx.reader,
+        getDispute: async (id: string) => {
+          builds++;
+          if (id === "Q-1") throw new Error("PayPal 503");
+          return h.ctx.reader.getDispute(id);
+        },
+      },
+      repo: { ...h.repo, rebuildFailed: async () => Promise.reject(new Error("db blip")) }, // the failure path itself fails
+    };
+    await drainRebuilds(counting);
+    expect(builds).toBe(3);
+    const left = (await h.sql.query<{ dispute_id: string }>(`select dispute_id from pending_rebuilds`)).rows.map((r) => r.dispute_id);
+    expect(left).toEqual(["Q-1"]); // stays queued for the next pass; Q-2 and Q-3 done exactly once
+  });
+
   it("a permanent error (PayPal 404) is abandoned instead of retried forever", async () => {
     await h.repo.queueRebuild(D);
     const gone = { ...h.ctx, reader: { ...h.ctx.reader, getDispute: async () => Promise.reject(new PaypalError("not found", 404, "dbg", "RESOURCE_NOT_FOUND", undefined)) } };

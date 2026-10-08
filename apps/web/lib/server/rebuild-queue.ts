@@ -46,13 +46,17 @@ export function drainRebuilds(ctx: AppContext): Promise<void> {
     try {
       do {
         rerun = false;
-        // Up to CONCURRENCY cases at a time (each is one dispute, so no two
-        // jobs touch the same case): a slow LLM call on one case doesn't hold
-        // up status updates for the others.
+        // A pool of CONCURRENCY workers, each taking the next job as soon as
+        // it's free: a slow LLM call on one case doesn't hold up the others.
+        // Each job is one dispute, so no two workers touch the same case.
+        // runJob never rejects, so the pass always waits for every job before
+        // `draining` is cleared (no job can be picked up twice).
         const jobs = await ctx.repo.dueRebuilds();
-        for (let i = 0; i < jobs.length; i += CONCURRENCY) {
-          await Promise.all(jobs.slice(i, i + CONCURRENCY).map((job) => runJob(ctx, job)));
-        }
+        let next = 0;
+        const worker = async () => {
+          while (next < jobs.length) await runJob(ctx, jobs[next++]!);
+        };
+        await Promise.all(Array.from({ length: Math.min(CONCURRENCY, jobs.length) }, worker));
       } while (rerun);
     } finally {
       draining = undefined;
@@ -61,7 +65,16 @@ export function drainRebuilds(ctx: AppContext): Promise<void> {
   return draining;
 }
 
+/** Never rejects: a failure while recording a failure is logged, and the row stays for the next pass. */
 async function runJob(ctx: AppContext, job: { disputeId: string; version: number; attempts: number }): Promise<void> {
+  try {
+    await runJobOnce(ctx, job);
+  } catch (e) {
+    console.error(`[alibi] rebuild bookkeeping failed for ${job.disputeId}:`, e instanceof Error ? e.message : e);
+  }
+}
+
+async function runJobOnce(ctx: AppContext, job: { disputeId: string; version: number; attempts: number }): Promise<void> {
   try {
     await rebuildCase(ctx, job.disputeId);
     await ctx.repo.rebuildDone(job.disputeId, job.version);

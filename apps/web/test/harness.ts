@@ -70,7 +70,7 @@ export async function startHarness(stubOpts: StubOptions = {}): Promise<Harness>
 export async function resetHarness(h: Harness) {
   h.stub.reset();
   h.ctx.enqueued.length = 0;
-  await h.sql.exec("truncate cases, approvals, submissions, webhook_events, activity, demo_links, pending_rebuilds, poll_state, comparisons restart identity");
+  await h.sql.exec("truncate cases, approvals, submissions, webhook_events, activity, demo_links, pending_rebuilds, app_state, comparisons restart identity");
 }
 
 /** Builds and stores a case through the real agent loop, with a chosen draft. */
