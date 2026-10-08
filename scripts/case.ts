@@ -65,6 +65,18 @@ function show({ caseFile: cf, draftHash, approvalValid, payload }: CaseView) {
   const dl = deadlineState(cf.dueAt, new Date(), 72);
   console.log(`\n${cf.disputeId}  ${cf.reason}  ${cf.amount.value} ${cf.amount.currency}${cf.amount.missing ? ` (${cf.amount.missing})` : ""}  ${cf.status}  ${cf.stage}`);
   console.log(`deadline: ${dl.kind}${"hoursLeft" in dl ? ` (${dl.hoursLeft.toFixed(1)} h)` : ` (${dl.reason})`}   stance: ${cf.strategy.stance}`);
+  const by = cf.authoredBy;
+  if (by) {
+    console.log(
+      by.drafter === "llm"
+        ? `drafted by ${by.model} (${by.llmCalls} LLM call${by.llmCalls === 1 ? "" : "s"}${by.repaired ? ", revised after the checker rejected claims" : ""}${by.stanceCapped ? ", stance lowered to match the evidence" : ""})`
+        : `drafted by the template drafter (${by.fallbackReason ?? "no LLM"})`,
+    );
+  }
+  if (cf.strategy.reasons.length) {
+    console.log("\nWhy");
+    for (const r of cf.strategy.reasons) console.log(`  - ${r.text}  [${r.evidenceIds.join(", ")}]`);
+  }
   console.log("\nChecklist");
   for (const c of cf.checklist) console.log(`  ${c.gap ? "!" : "✔"} ${c.evidenceType}  ${c.satisfiedBy.length} record(s)${c.gap ? `  — ${c.gap}` : ""}`);
   console.log("\nDraft claims");
