@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { evidenceId, indexEvidence, makeEvidenceRecord, timeline } from "../src/evidence.js";
-import { canonicalJson } from "../src/hash.js";
-import { buyerMsg, delivered, order, shipment, tx } from "./fixtures.js";
+import { evidenceId, indexEvidence, makeEvidenceRecord, timeline } from "../src/evidence";
+import { canonicalJson } from "../src/hash";
+import { buyerMsg, delivered, order, shipment, tx } from "./fixtures";
 
 describe("evidence records", () => {
   it("ids are stable and ignore label and fetchedAt", () => {

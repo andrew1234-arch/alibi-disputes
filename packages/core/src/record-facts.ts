@@ -1,5 +1,5 @@
-import { CARRIERS, canonicalDecimal, extractFacts, normaliseIdentifier, normaliseQuote } from "./extract.js";
-import type { EvidenceRecord } from "./types.js";
+import { CARRIERS, canonicalDecimal, extractFacts, normaliseIdentifier, normaliseQuote } from "./extract";
+import type { EvidenceRecord } from "./types";
 
 // The facts an evidence record can vouch for, in the same normalised forms the
 // extractor produces for claims, so the verifier compares like with like.

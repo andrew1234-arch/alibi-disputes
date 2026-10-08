@@ -67,7 +67,7 @@ export interface CaseFile {
   reason: string;
   status: string;
   stage: string;
-  amount: { value: string; currency: string };
+  amount: { value: string; currency: string; missing?: string }; // value "—" + missing reason when PayPal omits it (CLAUDE §1.3)
   dueAt?: string;
   requested: RequestedEvidence[];
   timeline: string[]; // EvidenceRecord ids in time order
@@ -81,7 +81,7 @@ export interface CaseFile {
   };
   evidence: Record<string, EvidenceRecord>;
   removedByVerifier: { text: string; reason: string }[];
-  approval?: { approvedAt: string; draftHash: string }; // hash binds approval to exact content
+  approval?: { approvedAt: string; draftHash: string }; // approvalHash(): binds approval to the draft and the exact payload
   submission?: { submittedAt: string; paypalStatusAfter: string; requestId?: string };
   createdAt: string;
 }

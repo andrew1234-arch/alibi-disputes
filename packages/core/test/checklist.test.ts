@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { baselineStance, buildChecklist, isDeliveredEvent } from "../src/checklist.js";
-import { makeEvidenceRecord } from "../src/evidence.js";
-import { evidenceRule } from "../src/reason-map.js";
-import { delivered, inTransit, order, refund, shipment, tx } from "./fixtures.js";
+import { baselineStance, buildChecklist, isDeliveredEvent } from "../src/checklist";
+import { makeEvidenceRecord } from "../src/evidence";
+import { evidenceRule } from "../src/reason-map";
+import { delivered, inTransit, order, refund, shipment, tx } from "./fixtures";
 
 const INR = "MERCHANDISE_OR_SERVICE_NOT_RECEIVED";
 const fromSeller = (evidenceType: string) => ({ evidenceType, source: "REQUESTED_FROM_SELLER" });

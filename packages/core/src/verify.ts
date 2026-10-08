@@ -1,8 +1,9 @@
-import { buildRecordFacts, isValidTimeZone, type RecordFacts } from "./record-facts.js";
-import { carrierCode, currenciesCompatible, extractFacts, normaliseIdentifier, normaliseQuote, type ExtractedFact } from "./extract.js";
-import { canonicalJson, sha256Hex } from "./hash.js";
-import { PROVIDE_EVIDENCE_NOTES_MAX } from "./paypal-enums.js";
-import type { CaseFile, ChecklistItem, DraftClaim, EvidenceRecord, SubmissionRoute, TrackingInfo } from "./types.js";
+import { buildRecordFacts, isValidTimeZone, type RecordFacts } from "./record-facts";
+import { carrierCode, currenciesCompatible, extractFacts, normaliseIdentifier, normaliseQuote, type ExtractedFact } from "./extract";
+import { canonicalJson, sha256Hex } from "./hash";
+import { buildEvidencePayload } from "./payload";
+import { PROVIDE_EVIDENCE_NOTES_MAX } from "./paypal-enums";
+import type { CaseFile, ChecklistItem, DraftClaim, EvidenceRecord, SubmissionRoute, TrackingInfo } from "./types";
 
 // Draft verifier (SPEC §5.5, CLAUDE §1.2). Pure and deterministic.
 //
@@ -325,9 +326,34 @@ export function draftHash(draft: Pick<CaseFile["draft"], "claims" | "notes" | "e
   );
 }
 
-/** An approval only counts if it was given for the current draft content. */
-export function isApprovalValid(cf: Pick<CaseFile, "approval" | "draft">): boolean {
-  return cf.approval !== undefined && cf.approval.draftHash === draftHash(cf.draft);
+type ApprovalInput = Pick<CaseFile, "draft" | "checklist" | "evidence">;
+
+/**
+ * What the merchant approves: the draft text AND the exact provide-evidence
+ * payload built from it (evidence types, tracking, refund ids, attached files).
+ * The payload also depends on the checklist and evidence, so a rebuild that
+ * adds a requested type changes this hash even when the draft text doesn't.
+ * Stored as `approval.draftHash`.
+ *
+ * Worked example: merchant approves with PayPal requesting PROOF_OF_FULFILLMENT
+ * only. A webhook rebuild adds PROOF_OF_REFUND; the draft is unchanged, but the
+ * checklist is part of the payload input, so the hash moves and the approval lapses.
+ */
+export function approvalHash(cf: ApprovalInput): string {
+  const payload = buildEvidencePayload(cf.draft, cf.checklist, cf.evidence);
+  return sha256Hex(
+    canonicalJson({
+      draft: draftHash(cf.draft),
+      evidences: payload.evidences,
+      files: payload.documentIds.map((id) => ({ id, url: cf.evidence[id]?.documentUrl ?? null })),
+      checklist: cf.checklist.map((c) => c.evidenceType),
+    }),
+  );
+}
+
+/** An approval only counts if it was given for exactly what would be sent now. */
+export function isApprovalValid(cf: Pick<CaseFile, "approval"> & ApprovalInput): boolean {
+  return cf.approval !== undefined && cf.approval.draftHash === approvalHash(cf);
 }
 
 /**

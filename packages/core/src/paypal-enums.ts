@@ -49,3 +49,8 @@ export const REQUIRE_EVIDENCE_ACTIONS = ["BUYER_EVIDENCE", "SELLER_EVIDENCE"] as
 
 /** components.schemas.adjudicate.properties.adjudication_outcome (sandbox only) */
 export const ADJUDICATION_OUTCOMES = ["BUYER_FAVOR", "SELLER_FAVOR"] as const;
+
+/** The one status in which the seller can respond (the approval gate requires it). */
+export const SELLER_RESPONSE_STATUS = "WAITING_FOR_SELLER_RESPONSE" satisfies (typeof DISPUTE_STATUSES)[number];
+/** Where a dispute goes once PayPal has the seller's evidence. VERIFY: G5, first real submission. */
+export const UNDER_REVIEW_STATUS = "UNDER_REVIEW" satisfies (typeof DISPUTE_STATUSES)[number];

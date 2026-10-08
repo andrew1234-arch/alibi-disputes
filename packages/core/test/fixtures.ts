@@ -1,4 +1,4 @@
-import { makeEvidenceRecord } from "../src/evidence.js";
+import { makeEvidenceRecord } from "../src/evidence";
 
 // SPEC §5.3 worked example: item not received, $84.00, order #1042, UPS, delivered Oct 6.
 const fetchedAt = "2026-10-07T09:00:00Z";

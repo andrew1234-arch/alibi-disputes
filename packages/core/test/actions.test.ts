@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasAction, normaliseAction } from "../src/actions.js";
+import { hasAction, normaliseAction } from "../src/actions";
 
 describe("normaliseAction", () => {
   it("treats hyphens, underscores and case as equivalent", () => {

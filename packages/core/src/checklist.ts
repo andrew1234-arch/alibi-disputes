@@ -1,5 +1,5 @@
-import { evidenceRule, REASON_EVIDENCE_MAP, type ReasonEvidenceMap } from "./reason-map.js";
-import type { ChecklistItem, EvidenceRecord, RequestedEvidence, Stance } from "./types.js";
+import { evidenceRule, REASON_EVIDENCE_MAP, type ReasonEvidenceMap } from "./reason-map";
+import type { ChecklistItem, EvidenceRecord, RequestedEvidence, Stance } from "./types";
 
 // Evidence checklist (SPEC §5.3 step 3) and a deterministic baseline stance.
 //

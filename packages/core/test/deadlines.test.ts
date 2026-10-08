@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deadlineState, hoursLeft } from "../src/deadlines.js";
+import { deadlineState, hoursLeft } from "../src/deadlines";
 
 describe("deadlines", () => {
   it("worked example: offset due date vs UTC now", () => {

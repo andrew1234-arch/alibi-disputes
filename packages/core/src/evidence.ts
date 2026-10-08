@@ -1,5 +1,5 @@
-import { canonicalJson, sha256Hex } from "./hash.js";
-import type { EvidenceRecord } from "./types.js";
+import { canonicalJson, sha256Hex } from "./hash";
+import type { EvidenceRecord } from "./types";
 
 // Evidence records (SPEC §4). The id is a stable hash of (source, kind, ref,
 // value, occurredAt), so re-fetching the same fact yields the same id and

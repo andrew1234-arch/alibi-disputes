@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildChecklist } from "../src/checklist.js";
-import type { CaseFile } from "../src/types.js";
-import { applyMerchantEdit, draftHash, isApprovalValid, verifyDraft, type DraftInput } from "../src/verify.js";
-import { makeEvidenceRecord } from "../src/evidence.js";
-import { buyerMsg, delivered, evidenceMap, order, refund, shipment, tx } from "./fixtures.js";
+import { buildChecklist } from "../src/checklist";
+import type { CaseFile } from "../src/types";
+import { applyMerchantEdit, approvalHash, draftHash, isApprovalValid, verifyDraft, type DraftInput } from "../src/verify";
+import { makeEvidenceRecord } from "../src/evidence";
+import { buyerMsg, delivered, evidenceMap, order, refund, shipment, tx } from "./fixtures";
 
 const INR = "MERCHANDISE_OR_SERVICE_NOT_RECEIVED";
 const requested = [{ evidenceType: "PROOF_OF_FULFILLMENT", source: "REQUESTED_FROM_SELLER" }];
@@ -290,9 +290,9 @@ describe("approval binding", () => {
     draft: { claims: verified.claims, notes: verified.notes, documents: verified.documents },
     evidence: evidenceMap,
     removedByVerifier: [],
-    approval: { approvedAt: "2026-10-08T00:00:00Z", draftHash: verified.draftHash },
     createdAt: "2026-10-08T00:00:00Z",
   };
+  cf.approval = { approvedAt: "2026-10-08T00:00:00Z", draftHash: approvalHash(cf) };
 
   it("approval is valid for the exact draft it was given for", () => {
     expect(draftHash(cf.draft)).toBe(verified.draftHash);
@@ -303,6 +303,8 @@ describe("approval binding", () => {
     expect(isApprovalValid({ ...cf, draft: { ...cf.draft, notes: cf.draft.notes + " " } })).toBe(false);
     expect(isApprovalValid({ ...cf, draft: { ...cf.draft, documents: [delivered.id] } })).toBe(false);
     expect(isApprovalValid({ ...cf, approval: undefined })).toBe(false);
+    // Draft text unchanged, but the payload would change: a newly requested type.
+    expect(isApprovalValid({ ...cf, checklist: [...cf.checklist, { evidenceType: "OTHER", satisfiedBy: [tx.id], routes: ["notes_or_documents"] }] })).toBe(false);
   });
 
   it("a merchant edit re-verifies and drops the approval", () => {

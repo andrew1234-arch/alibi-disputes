@@ -17,7 +17,7 @@ function graph(entry: string, seen = new Map<string, string[]>()): Map<string, s
     .filter((m) => !/^\s*(import|export)\s+type\b/.test(m[0])) // type-only imports are erased
     .map((m) => m[1]!);
   seen.set(entry, specs);
-  for (const s of specs) if (s.startsWith(".")) graph(resolve(dirname(entry), s.replace(/\.js$/, ".ts")), seen);
+  for (const s of specs) if (s.startsWith(".")) graph(resolve(dirname(entry), s.replace(/\.js$/, "") + ".ts"), seen);
   return seen;
 }
 

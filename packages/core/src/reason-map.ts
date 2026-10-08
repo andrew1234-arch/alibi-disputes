@@ -1,4 +1,4 @@
-import type { EvidenceKind, SubmissionRoute } from "./types.js";
+import type { EvidenceKind, SubmissionRoute } from "./types";
 
 // Reason → evidence map (SPEC §5.2).
 //

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canonicalDecimal, carrierCode, extractFacts } from "../src/extract.js";
+import { canonicalDecimal, carrierCode, extractFacts } from "../src/extract";
 
 const types = (s: string) => extractFacts(s).map((f) => f.type);
 const one = (s: string) => {
